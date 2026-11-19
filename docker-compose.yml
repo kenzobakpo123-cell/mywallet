@@ -1,0 +1,24 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: keuangan-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root-rahasia
+      MYSQL_DATABASE: keuangan
+      MYSQL_USER: finwise
+      MYSQL_PASSWORD: finwise-rahasia
+    ports:
+      # 3307 dipakai karena 3306 masih dipakai MySQL XAMPP di host.
+      # Kalau XAMPP sudah dimatikan, boleh diubah ke "3306:3306".
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot-rahasia"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  mysql-data:

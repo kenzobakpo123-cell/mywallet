@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root-rahasia
+          MYSQL_DATABASE: keuangan
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -proot-rahasia"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
+    env:
+      DATABASE_URL: mysql://root:root-rahasia@localhost:3306/keuangan
+      JWT_SECRET: ci-only-secret-minimal-32-karakter-aman
+      ARCJET_KEY: ""
+      RESEND_API_KEY: ""
+      EMAIL_FROM: "Finwise <onboarding@resend.dev>"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm test
+      - run: npm run db:migrate
+      - run: npm run build

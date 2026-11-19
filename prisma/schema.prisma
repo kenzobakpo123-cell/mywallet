@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum TxType {
+  INCOME
+  EXPENSE
+}
+
+model User {
+  id                   Int           @id @default(autoincrement())
+  name                 String
+  email                String        @unique
+  passwordHash         String
+  tokenVersion         Int           @default(0)
+  timezone             String        @default("UTC")
+  currency             String        @default("IDR")
+  emailVerified        DateTime?
+  verificationToken    String?       @unique
+  verificationExpires  DateTime?
+  passwordResetToken   String?       @unique
+  passwordResetExpires DateTime?
+  createdAt            DateTime      @default(now())
+  transactions         Transaction[]
+  wallets              Wallet[]
+  categories           Category[]
+  budgets              Budget[]
+  sessions             Session[]
+}
+
+model Session {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  // Refresh token disimpan sebagai hash SHA-256, bukan token mentah.
+  tokenHash  String    @unique @db.VarChar(64)
+  label      String    @db.VarChar(191)
+  ip         String?   @db.VarChar(191)
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model Transaction {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  type      TxType
+  amount    Int
+  category  String
+  note      String?
+  date      DateTime
+  // Tanggal kalender menurut zona waktu pengguna; tidak berubah saat zona waktu diganti.
+  dateKey   String    @db.VarChar(10)
+  walletId  Int?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet    Wallet?  @relation(fields: [walletId], references: [id], onDelete: SetNull)
+
+  @@index([userId, dateKey, date])
+  @@index([userId, date])
+}
+
+model Wallet {
+  id             Int           @id @default(autoincrement())
+  userId         Int
+  name           String
+  initialBalance Int           @default(0)
+  createdAt      DateTime      @default(now())
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions   Transaction[]
+
+  @@unique([userId, name])
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  name      String
+  type      TxType
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  budgets   Budget[]
+
+  @@unique([userId, name, type])
+}
+
+model Budget {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  categoryId Int
+  month      String
+  limit      Int
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, month])
+  @@index([userId, month])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int?
+  action    String
+  entity    String?
+  entityId  Int?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+}

@@ -1,0 +1,27 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: keuangan-mysql-prod
+    restart: unless-stopped
+    env_file: .env.production
+    volumes:
+      - mysql-prod-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p\"$$MYSQL_ROOT_PASSWORD\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    container_name: keuangan-app-prod
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      - "3000:3000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-prod-data:
