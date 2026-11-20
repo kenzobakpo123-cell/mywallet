@@ -53,4 +53,14 @@
 4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Hasil ada di folder `backups/`.
 5. CI GitHub Actions menjalankan `lint`, `test`, `migrate`, dan `build` pada setiap push/PR.
 
+### Deploy ke Vercel + MySQL cloud
+1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
+2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
+3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, dan `EMAIL_FROM`.
+4. Domain dari IDwebhost: di Vercel → **Settings → Domains → Add**, lalu di DNS IDwebhost arahkan `A @` ke IP Vercel dan `CNAME www` ke `cname.vercel-dns.com`. SSL otomatis dari Vercel.
+5. Di Resend → **Domains**, tambahkan domain yang sama dan salin record SPF/DKIM/DMARC ke DNS IDwebhost agar `EMAIL_FROM` memakai domain sendiri.
+6. Di Arcjet, buat site untuk domain produksi dan salin Site Key ke `ARCJET_KEY`.
+7. Di project Expo, isi `EXPO_PUBLIC_API_URL="https://domainkamu.com"`. URL wajib HTTPS.
+8. Cek `https://domainkamu.com/api/health` sebelum dipakai HP.
+
 Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, dan perubahan data). Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token disimpan sebagai hash SHA-256.
