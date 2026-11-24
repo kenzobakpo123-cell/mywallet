@@ -64,4 +64,8 @@
 8. Di project Expo, isi `EXPO_PUBLIC_API_URL="https://<nama-project>.vercel.app"` bila belum punya domain sendiri.
 9. Cek `https://<nama-project>.vercel.app/api/health` sebelum dipakai HP.
 
+> Railway: `mysql.railway.internal` hanya bisa diakses dari dalam jaringan Railway. Untuk Vercel, buat **TCP proxy** pada service MySQL dan pakai endpoint publiknya di `DATABASE_URL`, misalnya `mysql://root:PASSWORD@hopper.proxy.rlwy.net:15197/railway`.
+
+Deploy saat ini: `https://mywallet-virid-eight.vercel.app`.
+
 Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, dan perubahan data). Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token disimpan sebagai hash SHA-256.
