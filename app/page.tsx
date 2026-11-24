@@ -1,36 +1,44 @@
 "use client";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { dateKeyInZone, localDateInputValue } from "@/lib/dates";
 import { CURRENCIES, TIMEZONES, displayDate, formatMoney } from "@/lib/preferences";
+import { api } from "@/components/client-api";
+import AuthScreen from "@/components/auth-screen";
+import {
+  EMPTY_FILTERS,
+  EMPTY_SUM,
+  type Budget,
+  type Category,
+  type Filters,
+  type Profile,
+  type SessionInfo,
+  type Sum,
+  type Tx,
+  type Wallet,
+} from "@/components/finance-types";
 
-type Tx = { id: number; type: "INCOME" | "EXPENSE"; amount: number; category: string; note: string | null; date: string; dateKey?: string };
-type Profile = { name: string; email: string; timezone: string; currency: string };
-type SessionInfo = {
-  id: number;
-  label: string;
-  ip: string | null;
-  createdAt: string;
-  lastUsedAt: string;
-  expiresAt: string;
-  current: boolean;
-};
-type Sum = { month: string; income: number; expense: number; monthNet: number; balance: number; byCategory: { category: string; categoryId: number | null; total: number }[] };
-type Wallet = { id: number; name: string; initialBalance: number; balance: number };
-type Category = { id: number; name: string; type: "INCOME" | "EXPENSE" };
-type Budget = { id: number; categoryId: number; limit: number; category: Category };
-type Filters = { q: string; category: string; from: string; to: string };
-const EMPTY_FILTERS: Filters = { q: "", category: "", from: "", to: "" };
-const EMPTY_SUM: Sum = { month: "", income: 0, expense: 0, monthNet: 0, balance: 0, byCategory: [] };
+type Section = "summary" | "transactions" | "profile" | "sessions";
 
-async function api(url: string, method = "GET", body?: unknown, retry = true) {
-  const r = await fetch(url, { method, credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
-  // Token akses hanya berumur 15 menit. refresh_token httpOnly dipakai untuk
-  // memperbaruinya secara otomatis tanpa bisa dibaca JavaScript.
-  if (r.status === 401 && retry && !url.startsWith("/api/auth/")) {
-    const refreshed = await fetch("/api/auth/refresh", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" } });
-    if (refreshed.ok) return api(url, method, body, false);
+const NAV: { key: Section; label: string; icon: string; target: string }[] = [
+  { key: "summary", label: "Ringkasan", icon: "⌂", target: "summary" },
+  { key: "transactions", label: "Transaksi", icon: "↕", target: "transaction-history" },
+  { key: "profile", label: "Profil", icon: "⚙", target: "profile" },
+  { key: "sessions", label: "Perangkat", icon: "▦", target: "sessions" },
+];
+
+function queryFor(month: string, filters: Filters, offset?: number) {
+  const params = new URLSearchParams();
+  if (filters.from || filters.to) {
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+  } else {
+    params.set("month", month);
   }
-  return { ok: r.ok, status: r.status, d: await r.json().catch(() => ({})) };
+  if (filters.q) params.set("q", filters.q);
+  if (filters.category) params.set("category", filters.category);
+  if (offset !== undefined) params.set("offset", String(offset));
+  return params.toString();
 }
 
 export default function Home() {
@@ -41,7 +49,7 @@ export default function Home() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [activeSection, setActiveSection] = useState<"summary" | "transactions" | "profile" | "sessions">("summary");
+  const [activeSection, setActiveSection] = useState<Section>("summary");
   const [msg, setMsg] = useState("");
   const [loadError, setLoadError] = useState("");
   const [txTotal, setTxTotal] = useState(0);
@@ -58,48 +66,39 @@ export default function Home() {
   const todayInput = profile ? dateKeyInZone(new Date(), profile.timezone) : localDateInputValue();
 
   const load = useCallback(async () => {
-    const txParams = new URLSearchParams();
-    if (appliedFilters.from || appliedFilters.to) {
-      if (appliedFilters.from) txParams.set("from", appliedFilters.from);
-      if (appliedFilters.to) txParams.set("to", appliedFilters.to);
-    } else {
-      txParams.set("month", month);
-    }
-    if (appliedFilters.q) txParams.set("q", appliedFilters.q);
-    if (appliedFilters.category) txParams.set("category", appliedFilters.category);
-
-    const [a, b, w, c, bu] = await Promise.all([
-      api(`/api/transactions?${txParams}`),
-      api(`/api/summary?month=${month}`),
-      api("/api/wallets"),
-      api("/api/categories"),
-      api(`/api/budgets?month=${month}`),
+    const [tx, summary, walletRes, categoryRes, budgetRes] = await Promise.all([
+      api<{ items: Tx[]; total: number }>(`/api/transactions?${queryFor(month, appliedFilters)}`),
+      api<Sum>(`/api/summary?month=${month}`),
+      api<{ items: Wallet[] }>("/api/wallets"),
+      api<{ items: Category[] }>("/api/categories"),
+      api<{ items: Budget[] }>(`/api/budgets?month=${month}`),
     ]);
-    if ([a, b, w, c, bu].some((r) => r.status === 401)) {
+
+    if ([tx, summary, walletRes, categoryRes, budgetRes].some((r) => r.status === 401)) {
       setAuthed(false);
       return;
     }
-    const failed = !a.ok || !b.ok || !w.ok || !c.ok || !bu.ok;
+
+    const failed = [tx, summary, walletRes, categoryRes, budgetRes].some((r) => !r.ok);
     setLoadError(failed ? "Sebagian data gagal dimuat. Muat ulang halaman untuk mencoba lagi." : "");
     setAuthed(true);
-    const items = Array.isArray(a.d.items) ? a.d.items : [];
-    setTxs(items);
-    setTxTotal(typeof a.d.total === "number" ? a.d.total : items.length);
+    setTxs(Array.isArray(tx.d.items) ? tx.d.items : []);
+    setTxTotal(typeof tx.d.total === "number" ? tx.d.total : 0);
     setTxOffset(0);
-    setSum(b.ok && Array.isArray(b.d.byCategory) ? b.d : EMPTY_SUM);
-    setWallets(Array.isArray(w.d.items) ? w.d.items : []);
-    setCategories(Array.isArray(c.d.items) ? c.d.items : []);
-    setBudgets(Array.isArray(bu.d.items) ? bu.d.items : []);
+    setSum(summary.ok && Array.isArray(summary.d.byCategory) ? summary.d : EMPTY_SUM);
+    setWallets(Array.isArray(walletRes.d.items) ? walletRes.d.items : []);
+    setCategories(Array.isArray(categoryRes.d.items) ? categoryRes.d.items : []);
+    setBudgets(Array.isArray(budgetRes.d.items) ? budgetRes.d.items : []);
   }, [month, appliedFilters]);
+
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [load]);
 
-  // Preferensi dipakai untuk mata uang dan menentukan "hari ini" sesuai zona waktu pengguna.
   useEffect(() => {
     if (authed !== true) return;
     let cancelled = false;
-    api("/api/profile").then((r) => {
+    api<{ profile: Profile }>("/api/profile").then((r) => {
       if (cancelled || !r.ok || !r.d.profile) return;
-      const p = r.d.profile as Profile;
+      const p = r.d.profile;
       setProfile(p);
       setProfileForm({ name: p.name, timezone: p.timezone, currency: p.currency });
       if (!prefInitialized.current) {
@@ -111,9 +110,10 @@ export default function Home() {
   }, [authed]);
 
   const loadSessions = useCallback(async () => {
-    const r = await api("/api/sessions");
-    if (r.ok && Array.isArray(r.d.items)) setSessions(r.d.items as SessionInfo[]);
+    const r = await api<{ items: SessionInfo[] }>("/api/sessions");
+    if (r.ok && Array.isArray(r.d.items)) setSessions(r.d.items);
   }, []);
+
   useEffect(() => {
     if (authed === true) queueMicrotask(() => { void loadSessions(); });
   }, [authed, loadSessions]);
@@ -132,6 +132,7 @@ export default function Home() {
     channel.onmessage = () => load();
     return () => { channel.close(); channelRef.current = null; };
   }, [load]);
+
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") load();
@@ -139,12 +140,9 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, [load]);
 
-  function broadcast() {
+  function refresh() {
     channelRef.current?.postMessage("refresh");
-  }
-  async function refresh() {
-    broadcast();
-    await load();
+    void load();
   }
 
   async function submitAuth(e: React.FormEvent<HTMLFormElement>) {
@@ -161,54 +159,57 @@ export default function Home() {
   }
 
   async function sendAuthEmail(kind: "forgot-password" | "resend-verification") {
-    const input = document.querySelector<HTMLInputElement>('input[name="email"]');
-    const email = input?.value.trim();
+    const email = document.querySelector<HTMLInputElement>('input[name="email"]')?.value.trim();
     if (!email) return setMsg("Isi alamat email terlebih dahulu.");
     setMsg("");
     const r = await api(`/api/auth/${kind}`, "POST", { email });
     setMsg(r.d.message ?? r.d.error ?? "Permintaan diproses.");
   }
 
-  async function addTx(e: React.FormEvent<HTMLFormElement>) {
+  async function submitForm(url: string, body: unknown, form: HTMLFormElement, errorText: string) {
+    const r = await api(url, "POST", body);
+    if (!r.ok) return setMsg(r.d.error ?? errorText);
+    form.reset();
+    setMsg("");
+    refresh();
+  }
+
+  function addTx(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = e.currentTarget, f = new FormData(form);
+    const form = e.currentTarget;
+    const f = new FormData(form);
     const walletValue = f.get("walletId");
-    const r = await api("/api/transactions", "POST", {
+    void submitForm("/api/transactions", {
       type: f.get("type"),
       amount: Number(f.get("amount")),
       category: f.get("category"),
       note: f.get("note") || undefined,
       date: f.get("date"),
       ...(walletValue ? { walletId: Number(walletValue) } : {}),
-    });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan");
-    form.reset(); setMsg(""); refresh();
+    }, form, "Gagal menyimpan transaksi");
   }
-  async function addWallet(e: React.FormEvent<HTMLFormElement>) {
+
+  function addWallet(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = e.currentTarget, f = new FormData(form);
-    const r = await api("/api/wallets", "POST", { name: f.get("name"), initialBalance: Number(f.get("initialBalance") || 0) });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan dompet");
-    form.reset(); setMsg(""); refresh();
+    const form = e.currentTarget;
+    const f = new FormData(form);
+    void submitForm("/api/wallets", { name: f.get("name"), initialBalance: Number(f.get("initialBalance") || 0) }, form, "Gagal menyimpan dompet");
   }
-  async function addCategory(e: React.FormEvent<HTMLFormElement>) {
+
+  function addCategory(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = e.currentTarget, f = new FormData(form);
-    const r = await api("/api/categories", "POST", { name: f.get("name"), type: f.get("type") });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan kategori");
-    form.reset(); setMsg(""); refresh();
+    const form = e.currentTarget;
+    const f = new FormData(form);
+    void submitForm("/api/categories", { name: f.get("name"), type: f.get("type") }, form, "Gagal menyimpan kategori");
   }
-  async function addBudget(e: React.FormEvent<HTMLFormElement>) {
+
+  function addBudget(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const form = e.currentTarget, f = new FormData(form);
-    const r = await api("/api/budgets", "POST", {
-      categoryId: Number(f.get("categoryId")),
-      month,
-      limit: Number(f.get("limit")),
-    });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan anggaran");
-    form.reset(); setMsg(""); refresh();
+    const form = e.currentTarget;
+    const f = new FormData(form);
+    void submitForm("/api/budgets", { categoryId: Number(f.get("categoryId")), month, limit: Number(f.get("limit")) }, form, "Gagal menyimpan anggaran");
   }
+
   async function remove(id: number) {
     if (!window.confirm("Hapus transaksi ini?")) return;
     const r = await api(`/api/transactions/${id}`, "DELETE");
@@ -219,75 +220,74 @@ export default function Home() {
   function readAmount(label: string, value: string): number | null {
     const amount = Number(value);
     if (!Number.isFinite(amount) || amount < 0 || !Number.isInteger(amount)) {
-      setMsg(`${label} harus berupa bilangan bulat non-negatif.`);
+      setMsg(`${label} harus bilangan bulat non-negatif.`);
       return null;
     }
     return amount;
   }
 
-  async function editWallet(wallet: Wallet) {
-    const name = window.prompt("Nama dompet", wallet.name);
-    if (name === null) return;
-    const raw = window.prompt("Saldo awal (Rp)", String(wallet.initialBalance));
-    if (raw === null) return;
-    const initialBalance = readAmount("Saldo awal", raw);
-    if (initialBalance === null) return;
-    const r = await api(`/api/wallets/${wallet.id}`, "PATCH", { name: name.trim(), initialBalance });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal memperbarui dompet");
-    setMsg(""); refresh();
-  }
-  async function removeWallet(wallet: Wallet) {
-    if (!window.confirm(`Hapus dompet "${wallet.name}"? Transaksi di dalamnya tidak ikut terhapus.`)) return;
-    const r = await api(`/api/wallets/${wallet.id}`, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menghapus dompet");
-    setMsg(""); refresh();
+  async function patchAndRefresh(url: string, body: unknown, errorText: string) {
+    const r = await api(url, "PATCH", body);
+    if (!r.ok) return setMsg(r.d.error ?? errorText);
+    setMsg("");
+    refresh();
   }
 
-  async function editCategory(category: Category) {
+  async function deleteAndRefresh(url: string, confirmText: string, errorText: string) {
+    if (!window.confirm(confirmText)) return;
+    const r = await api(url, "DELETE");
+    if (!r.ok) return setMsg(r.d.error ?? errorText);
+    setMsg("");
+    refresh();
+  }
+
+  function editWallet(wallet: Wallet) {
+    const name = window.prompt("Nama dompet", wallet.name);
+    if (name === null) return;
+    const raw = window.prompt("Saldo awal", String(wallet.initialBalance));
+    if (raw === null) return;
+    const initialBalance = readAmount("Saldo awal", raw);
+    if (initialBalance !== null) void patchAndRefresh(`/api/wallets/${wallet.id}`, { name: name.trim(), initialBalance }, "Gagal memperbarui dompet");
+  }
+
+  function removeWallet(wallet: Wallet) {
+    void deleteAndRefresh(`/api/wallets/${wallet.id}`, `Hapus dompet "${wallet.name}"? Transaksinya tidak ikut terhapus.`, "Gagal menghapus dompet");
+  }
+
+  function editCategory(category: Category) {
     const name = window.prompt("Nama kategori", category.name);
     if (name === null) return;
-    const rawType = window.prompt("Tipe (masuk / keluar)", category.type === "INCOME" ? "masuk" : "keluar");
+    const rawType = window.prompt('Tipe (masuk / keluar)', category.type === "INCOME" ? "masuk" : "keluar");
     if (rawType === null) return;
     const normalized = rawType.trim().toLowerCase();
     const type = normalized.startsWith("m") ? "INCOME" : normalized.startsWith("k") ? "EXPENSE" : null;
     if (!type) return setMsg('Tipe harus "masuk" atau "keluar".');
-    const r = await api(`/api/categories/${category.id}`, "PATCH", { name: name.trim(), type });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal memperbarui kategori");
-    setMsg(""); refresh();
-  }
-  async function removeCategory(category: Category) {
-    if (!window.confirm(`Hapus kategori "${category.name}"? Anggaran kategori ini juga akan hilang.`)) return;
-    const r = await api(`/api/categories/${category.id}`, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menghapus kategori");
-    setMsg(""); refresh();
+    void patchAndRefresh(`/api/categories/${category.id}`, { name: name.trim(), type }, "Gagal memperbarui kategori");
   }
 
-  async function editBudget(budget: Budget) {
-    const raw = window.prompt(`Batas anggaran ${budget.category.name} (Rp)`, String(budget.limit));
+  function removeCategory(category: Category) {
+    void deleteAndRefresh(`/api/categories/${category.id}`, `Hapus kategori "${category.name}"? Anggarannya juga hilang.`, "Gagal menghapus kategori");
+  }
+
+  function editBudget(budget: Budget) {
+    const raw = window.prompt(`Batas anggaran ${budget.category.name}`, String(budget.limit));
     if (raw === null) return;
     const limit = readAmount("Batas anggaran", raw);
-    if (limit === null || limit === 0) return setMsg("Batas anggaran harus lebih dari 0.");
-    const r = await api(`/api/budgets/${budget.id}`, "PATCH", { limit });
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal memperbarui anggaran");
-    setMsg(""); refresh();
+    if (limit === null) return;
+    if (limit === 0) return setMsg("Batas anggaran harus lebih dari 0.");
+    void patchAndRefresh(`/api/budgets/${budget.id}`, { limit }, "Gagal memperbarui anggaran");
   }
-  async function removeBudget(budget: Budget) {
-    if (!window.confirm(`Hapus anggaran ${budget.category.name}?`)) return;
-    const r = await api(`/api/budgets/${budget.id}`, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menghapus anggaran");
-    setMsg(""); refresh();
+
+  function removeBudget(budget: Budget) {
+    void deleteAndRefresh(`/api/budgets/${budget.id}`, `Hapus anggaran ${budget.category.name}?`, "Gagal menghapus anggaran");
   }
 
   function applyFilters(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    setAppliedFilters({
-      q: filters.q.trim(),
-      category: filters.category,
-      from: filters.from,
-      to: filters.to,
-    });
+    setAppliedFilters({ q: filters.q.trim(), category: filters.category, from: filters.from, to: filters.to });
     setTxOffset(0);
   }
+
   function resetFilters() {
     setFilters(EMPTY_FILTERS);
     setAppliedFilters(EMPTY_FILTERS);
@@ -295,27 +295,17 @@ export default function Home() {
 
   async function loadMore() {
     const offset = txOffset + 200;
-    const txParams = new URLSearchParams();
-    if (appliedFilters.from || appliedFilters.to) {
-      if (appliedFilters.from) txParams.set("from", appliedFilters.from);
-      if (appliedFilters.to) txParams.set("to", appliedFilters.to);
-    } else {
-      txParams.set("month", month);
-    }
-    if (appliedFilters.q) txParams.set("q", appliedFilters.q);
-    if (appliedFilters.category) txParams.set("category", appliedFilters.category);
-    txParams.set("offset", String(offset));
-
-    const r = await api(`/api/transactions?${txParams}`);
+    const r = await api<{ items: Tx[] }>(`/api/transactions?${queryFor(month, appliedFilters, offset)}`);
     if (!r.ok || !Array.isArray(r.d.items)) return setMsg("Gagal memuat transaksi lainnya");
     setTxs((prev) => [...prev, ...r.d.items]);
     setTxOffset(offset);
   }
+
   async function saveProfile(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const r = await api("/api/profile", "PATCH", profileForm);
+    const r = await api<{ profile: Profile }>("/api/profile", "PATCH", profileForm);
     if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan profil");
-    const p = r.d.profile as Profile;
+    const p = r.d.profile;
     setProfile(p);
     setMonth(dateKeyInZone(new Date(), p.timezone).slice(0, 7));
     setMsg("Profil berhasil disimpan.");
@@ -324,16 +314,16 @@ export default function Home() {
 
   async function revokeSession(item: SessionInfo) {
     if (!window.confirm(`Cabut akses perangkat "${item.label}"?`)) return;
-    const r = await api(`/api/sessions/${item.id}`, "DELETE");
+    const r = await api<{ current?: boolean }>(`/api/sessions/${item.id}`, "DELETE");
     if (!r.ok) return setMsg(r.d.error ?? "Gagal mencabut sesi");
     setSessions((prev) => prev.filter((s) => s.id !== item.id));
     setMsg(r.d.current ? "Sesi perangkat ini dicabut." : "Perangkat berhasil dicabut.");
-    if (r.d.current) logout();
+    if (r.d.current) void logout();
   }
 
   async function revokeOtherSessions() {
-    if (!window.confirm("Cabut semua perangkat lain? Perangkat yang sedang kamu pakai tetap aktif.")) return;
-    const r = await api("/api/sessions", "DELETE");
+    if (!window.confirm("Cabut semua perangkat lain?")) return;
+    const r = await api<{ revoked?: number }>("/api/sessions", "DELETE");
     if (!r.ok) return setMsg(r.d.error ?? "Gagal mencabut sesi");
     void loadSessions();
     setMsg(`${r.d.revoked ?? 0} perangkat lain berhasil dicabut.`);
@@ -359,116 +349,49 @@ export default function Home() {
     setLoadError("");
   }
 
-  const monthLabel = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00Z`));
+  const monthLabel = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(`${month}-01T00:00:00Z`));
 
-  if (authed === null) return (
-    <main className="loading-screen" aria-label="Memuat aplikasi">
-      <div className="brand-mark">Rp</div>
-      <p>Memuat keuangan Anda...</p>
-    </main>
-  );
-  if (!authed)
+  if (authed === null) {
     return (
-      <main className="auth-page">
-        <section className="auth-showcase">
-          <div className="auth-brand"><span className="brand-mark">Rp</span><span>Finwise</span></div>
-          <div className="auth-copy">
-            <span className="eyebrow">Atur uang dengan tenang</span>
-            <h1>Keuanganmu,<br />lebih terkendali.</h1>
-            <p>Catat pemasukan dan pengeluaran, lalu lihat ke mana uangmu bergerak setiap bulan.</p>
-          </div>
-          <div className="mini-chart" aria-hidden="true">
-            <div className="mini-chart-head"><span>Ringkasan bulan ini</span><b>72%</b></div>
-            <div className="bar-track"><div /></div>
-            <div className="mini-chart-dots"><i /><i /><i /><i /><i /></div>
-          </div>
-        </section>
-        <section className="auth-panel">
-          <div className="auth-card">
-            <span className="auth-kicker">{mode === "login" ? "Selamat datang kembali" : "Mulai perjalananmu"}</span>
-            <h2>{mode === "login" ? "Masuk ke akun" : "Buat akun baru"}</h2>
-            <p className="auth-description">{mode === "login" ? "Masukkan detail akun untuk melanjutkan." : "Daftar gratis dan kelola keuanganmu."}</p>
-            <form className="auth-form" onSubmit={submitAuth}>
-              {mode === "register" && (
-                <label>Nama lengkap
-                  <input name="name" placeholder="Contoh: Ahmad Santoso" required />
-                </label>
-              )}
-              <label>Email
-                <input name="email" type="email" placeholder="nama@email.com" required />
-              </label>
-              <label>Password
-                <input name="password" type="password" placeholder="Minimal 8 karakter" minLength={8} required />
-              </label>
-              {mode === "login" && (
-                <div className="auth-links">
-                  <button type="button" className="text-button" onClick={() => sendAuthEmail("forgot-password")}>Lupa password?</button>
-                  <button type="button" className="text-button" onClick={() => sendAuthEmail("resend-verification")}>Kirim ulang verifikasi</button>
-                </div>
-              )}
-              {msg && <p className={/berhasil|dibuat|terkirim|diproses|aktif/i.test(msg) ? "success" : "err"}>{msg}</p>}
-              <button className="primary-button" type="submit">{mode === "login" ? "Masuk" : "Buat akun"}</button>
-            </form>
-            <p className="auth-switch">
-              {mode === "login" ? "Belum punya akun?" : "Sudah punya akun?"}
-              <button type="button" className="text-button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setMsg(""); }}>
-                {mode === "login" ? "Daftar sekarang" : "Masuk"}
-              </button>
-            </p>
-          </div>
-        </section>
+      <main className="loading-screen" aria-label="Memuat aplikasi">
+        <div className="brand-mark">Rp</div>
+        <p>Menyiapkan buku kas kamu…</p>
       </main>
     );
+  }
+
+  if (!authed) {
+    return (
+      <AuthScreen
+        mode={mode}
+        msg={msg}
+        onSubmit={submitAuth}
+        onAuthEmail={sendAuthEmail}
+        onSwitchMode={() => { setMode(mode === "login" ? "register" : "login"); setMsg(""); }}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="app-brand"><span className="brand-mark">Rp</span><span>Finwise</span></div>
         <nav className="nav-list" aria-label="Navigasi utama">
-          <button
-            className={`nav-item ${activeSection === "summary" ? "active" : ""}`}
-            type="button"
-            aria-current={activeSection === "summary" ? "page" : undefined}
-            onClick={() => {
-              setActiveSection("summary");
-              document.getElementById("summary")?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            <span className="nav-icon">⌂</span><span>Ringkasan</span>
-          </button>
-          <button
-            className={`nav-item ${activeSection === "transactions" ? "active" : ""}`}
-            type="button"
-            aria-current={activeSection === "transactions" ? "page" : undefined}
-            onClick={() => {
-              setActiveSection("transactions");
-              document.getElementById("transaction-history")?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            <span className="nav-icon">↕</span><span>Transaksi</span>
-          </button>
-          <button
-            className={`nav-item ${activeSection === "profile" ? "active" : ""}`}
-            type="button"
-            aria-current={activeSection === "profile" ? "page" : undefined}
-            onClick={() => {
-              setActiveSection("profile");
-              document.getElementById("profile")?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            <span className="nav-icon">⚙</span><span>Profil</span>
-          </button>
-          <button
-            className={`nav-item ${activeSection === "sessions" ? "active" : ""}`}
-            type="button"
-            aria-current={activeSection === "sessions" ? "page" : undefined}
-            onClick={() => {
-              setActiveSection("sessions");
-              document.getElementById("sessions")?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            <span className="nav-icon">▦</span><span>Perangkat</span>
-          </button>
+          {NAV.map((item) => (
+            <button
+              key={item.key}
+              className={`nav-item ${activeSection === item.key ? "active" : ""}`}
+              type="button"
+              aria-current={activeSection === item.key ? "page" : undefined}
+              onClick={() => {
+                setActiveSection(item.key);
+                document.getElementById(item.target)?.scrollIntoView({ behavior: "smooth" });
+              }}
+            >
+              <span className="nav-icon">{item.icon}</span><span>{item.label}</span>
+            </button>
+          ))}
         </nav>
         <button className="logout-button" type="button" onClick={() => logout()}>
           <span>↪</span> Keluar
@@ -478,14 +401,17 @@ export default function Home() {
       <section className="dashboard">
         <header className="dashboard-header" id="summary">
           <div>
-            <p className="header-kicker">Ringkasan keuangan</p>
-            <h1>Halo, {profile?.name ?? "selamat datang"} <span>👋</span></h1>
+            <p className="header-kicker">Buku kas · {monthLabel}</p>
+            <h1>Halo, {profile?.name ?? "kamu"}.</h1>
           </div>
           <div className="header-actions">
             <div className="month-pill">{monthLabel}</div>
             <a className="export-button" href={`/api/transactions/export?month=${month}`}>↓ Ekspor CSV</a>
           </div>
         </header>
+
+        {msg && <p className={/berhasil|dibuat|terkirim|diproses|aktif/i.test(msg) ? "success" : "err"}>{msg}</p>}
+        {loadError && <p className="err">{loadError}</p>}
 
         <div className="summary-grid">
           <article className="summary-card balance-card">
@@ -534,16 +460,15 @@ export default function Home() {
                 ) : <input value="Buat dompet di bawah" readOnly />}
               </label>
               <label className="full-field">Catatan
-                <input name="note" placeholder="Tambahkan keterangan (opsional)" />
+                <input name="note" placeholder="Keterangan opsional" />
               </label>
-              {(msg || loadError) && <p className="err full-field">{msg || loadError}</p>}
-              <button className="primary-button full-field" type="submit">+ Simpan transaksi</button>
+              <button className="primary-button full-field" type="submit">Simpan transaksi</button>
             </form>
           </section>
 
           <section className="panel category-panel">
             <div className="panel-heading">
-              <div><p className="panel-kicker">Analisis</p><h2>Pengeluaran kategori</h2></div>
+              <div><p className="panel-kicker">Analisis</p><h2>Pengeluaran per kategori</h2></div>
             </div>
             {sum && sum.byCategory.length > 0 ? (
               <div className="category-list">
@@ -551,19 +476,22 @@ export default function Home() {
                   const width = sum.expense ? Math.max(8, Math.round(c.total / sum.expense * 100)) : 0;
                   return (
                     <div className="category-row" key={c.category}>
-                      <div className="category-meta"><span><i className={`category-dot dot-${index % 5}`} />{c.category}</span><strong>{rp(c.total)}</strong></div>
+                      <div className="category-meta">
+                        <span><i className={`category-dot dot-${index % 5}`} />{c.category}</span>
+                        <strong>{rp(c.total)}</strong>
+                      </div>
                       <div className="category-track"><div className={`category-fill dot-${index % 5}`} style={{ width: `${width}%` }} /></div>
                     </div>
                   );
                 })}
               </div>
-            ) : <div className="empty-small"><span>◫</span><p>Belum ada pengeluaran</p></div>}
+            ) : <div className="empty-small"><span>◫</span><p>Belum ada pengeluaran bulan ini.</p></div>}
           </section>
         </div>
 
         <div className="management-grid">
           <section className="panel management-panel">
-            <div className="panel-heading"><div><p className="panel-kicker">Akun uang</p><h2>Dompet</h2></div></div>
+            <div className="panel-heading"><div><p className="panel-kicker">Tempat uang</p><h2>Dompet</h2></div></div>
             <div className="wallet-list">
               {wallets.length === 0 ? <p className="muted-copy">Belum ada dompet.</p> : wallets.map((wallet) => (
                 <div className="wallet-chip" key={wallet.id}>
@@ -608,7 +536,7 @@ export default function Home() {
                 const spent = sum?.byCategory.find((item) =>
                   budget.categoryId != null && item.categoryId != null
                     ? item.categoryId === budget.categoryId
-                    : item.category === budget.category.name
+                    : item.category === budget.category.name,
                 )?.total ?? 0;
                 const percent = Math.min(100, budget.limit ? Math.round(spent / budget.limit * 100) : 0);
                 return (
@@ -648,27 +576,15 @@ export default function Home() {
           </div>
           <form className="profile-form" onSubmit={saveProfile}>
             <label>Nama
-              <input
-                value={profileForm.name}
-                onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })}
-                minLength={2}
-                maxLength={60}
-                required
-              />
+              <input value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} minLength={2} maxLength={60} required />
             </label>
             <label>Zona waktu
-              <select
-                value={profileForm.timezone}
-                onChange={(e) => setProfileForm({ ...profileForm, timezone: e.target.value })}
-              >
+              <select value={profileForm.timezone} onChange={(e) => setProfileForm({ ...profileForm, timezone: e.target.value })}>
                 {TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
               </select>
             </label>
             <label>Mata uang
-              <select
-                value={profileForm.currency}
-                onChange={(e) => setProfileForm({ ...profileForm, currency: e.target.value })}
-              >
+              <select value={profileForm.currency} onChange={(e) => setProfileForm({ ...profileForm, currency: e.target.value })}>
                 {CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
               </select>
             </label>
@@ -690,11 +606,7 @@ export default function Home() {
                 <div className="session-row" key={item.id}>
                   <div className="session-detail">
                     <strong>{item.label}</strong>
-                    <span>
-                      {item.current ? "Perangkat ini · " : ""}
-                      {item.ip ? `${item.ip} · ` : ""}
-                      terakhir dipakai {fmtDateTime(item.lastUsedAt)}
-                    </span>
+                    <span>{item.current ? "Perangkat ini · " : ""}{item.ip ? `${item.ip} · ` : ""}terakhir dipakai {fmtDateTime(item.lastUsedAt)}</span>
                     <small>Masuk {fmtDateTime(item.createdAt)} · berlaku sampai {fmtDateTime(item.expiresAt)}</small>
                   </div>
                   {item.current ? (
@@ -715,17 +627,8 @@ export default function Home() {
             <span className="transaction-count">Menampilkan {txs.length} dari {txTotal} transaksi</span>
           </div>
           <form className="filter-bar" onSubmit={applyFilters}>
-            <input
-              aria-label="Cari transaksi"
-              placeholder="Cari kategori atau catatan…"
-              value={filters.q}
-              onChange={(e) => setFilters({ ...filters, q: e.target.value })}
-            />
-            <select
-              aria-label="Filter kategori"
-              value={filters.category}
-              onChange={(e) => setFilters({ ...filters, category: e.target.value })}
-            >
+            <input aria-label="Cari transaksi" placeholder="Cari kategori atau catatan…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+            <select aria-label="Filter kategori" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
               <option value="">Semua kategori</option>
               {categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
             </select>
@@ -760,9 +663,7 @@ export default function Home() {
             </div>
           )}
           {txs.length < txTotal && (
-            <button className="text-button" type="button" onClick={loadMore} style={{ marginTop: 12 }}>
-              Muat lebih banyak
-            </button>
+            <button className="text-button" type="button" onClick={loadMore} style={{ marginTop: 12 }}>Muat lebih banyak</button>
           )}
         </section>
       </section>
