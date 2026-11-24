@@ -57,10 +57,11 @@
 1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
 2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
 3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, dan `EMAIL_FROM`.
-4. Domain dari IDwebhost: di Vercel → **Settings → Domains → Add**, lalu di DNS IDwebhost arahkan `A @` ke IP Vercel dan `CNAME www` ke `cname.vercel-dns.com`. SSL otomatis dari Vercel.
-5. Di Resend → **Domains**, tambahkan domain yang sama dan salin record SPF/DKIM/DMARC ke DNS IDwebhost agar `EMAIL_FROM` memakai domain sendiri.
-6. Di Arcjet, buat site untuk domain produksi dan salin Site Key ke `ARCJET_KEY`.
-7. Di project Expo, isi `EXPO_PUBLIC_API_URL="https://domainkamu.com"`. URL wajib HTTPS.
-8. Cek `https://domainkamu.com/api/health` sebelum dipakai HP.
+4. **Tanpa beli domain (cukup untuk mulai):** Vercel otomatis memberi `https://<nama-project>.vercel.app` — gratis, HTTPS, dan SSL otomatis. Pakai URL itu untuk web dan untuk `EXPO_PUBLIC_API_URL` di Expo. Tidak perlu mengubah DNS di IDwebhost.
+5. **Domain sendiri (opsional, berbayar):** di Vercel → **Settings → Domains → Add**, lalu di DNS registrar arahkan `A @` ke `76.76.21.21` dan `CNAME www` ke `cname.vercel-dns.com`.
+6. Resend: untuk mulai, pakai `EMAIL_FROM="Finwise <onboarding@resend.dev>"`. Domain `resend.dev` hanya bisa mengirim ke **email akun Resend kamu sendiri**. Agar bisa mengirim ke email orang lain, tambahkan domain di Resend → **Domains** dan pasang record SPF/DKIM/DMARC di DNS.
+7. Di Arcjet, buat site untuk hostname yang dipakai (boleh `*.vercel.app`) dan salin Site Key ke `ARCJET_KEY`.
+8. Di project Expo, isi `EXPO_PUBLIC_API_URL="https://<nama-project>.vercel.app"` bila belum punya domain sendiri.
+9. Cek `https://<nama-project>.vercel.app/api/health` sebelum dipakai HP.
 
 Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, dan perubahan data). Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token disimpan sebagai hash SHA-256.
