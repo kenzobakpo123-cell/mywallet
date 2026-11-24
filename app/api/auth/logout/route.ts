@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth";
 import { clearAuthCookies } from "@/lib/cookies";
+import { forbidden, isSameOrigin } from "@/lib/security";
 import { audit } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
+  if (!isSameOrigin(req)) return forbidden();
+
   const viewer = await getViewer(req);
   const body = await req.json().catch(() => ({}));
   const all = body && typeof body === "object" && body.all === true;
@@ -31,8 +34,14 @@ export async function POST(req: NextRequest) {
       }
     } catch (error) {
       console.error("Gagal mencabut sesi:", error);
+      // Jangan beri tahu klien "berhasil" saat refresh token masih aktif di DB.
+      return NextResponse.json(
+        { error: "Gagal keluar dari semua perangkat. Coba lagi." },
+        { status: 503, headers: { "Retry-After": "5" } },
+      );
     }
   }
+
   const res = NextResponse.json({ ok: true, all });
   clearAuthCookies(res);
   return res;

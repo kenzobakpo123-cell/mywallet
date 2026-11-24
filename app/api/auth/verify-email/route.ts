@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 const page = (title: string, message: string, ok: boolean) =>
   new NextResponse(
     `<!doctype html><html lang="id"><meta charset="utf-8"><title>${title} - Finwise</title>
+    <script>if(location.search){history.replaceState(null,'',location.pathname)}</script>
     <body style="font-family:Arial,sans-serif;max-width:520px;margin:80px auto;color:#1d2b25;text-align:center">
       <h1 style="color:${ok ? "#1f7a5a" : "#b42318"}">${title}</h1>
       <p>${message}</p>
@@ -15,6 +16,13 @@ const page = (title: string, message: string, ok: boolean) =>
   );
 
 export async function GET(req: NextRequest) {
+  // Jangan konsumsi token verifikasi kalau permintaan datang dari prefetch /
+  // gambar di situs lain. Browser modern mengirim Sec-Fetch-Site pada request.
+  const fetchSite = req.headers.get("sec-fetch-site");
+  if (fetchSite && fetchSite !== "none" && fetchSite !== "same-origin") {
+    return page("Tautan tidak valid", "Tautan verifikasi tidak valid.", false);
+  }
+
   const token = req.nextUrl.searchParams.get("token") ?? "";
   if (!/^[a-f0-9]{64}$/.test(token)) {
     return page("Tautan tidak valid", "Tautan verifikasi tidak valid.", false);

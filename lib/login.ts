@@ -10,6 +10,7 @@ import { hashToken, newToken } from "@/lib/tokens";
 import { protectArcjet } from "@/lib/arcjet";
 import { loginNoticeEmail, sendMail } from "@/lib/email";
 import { audit } from "@/lib/audit";
+import { publicOrigin } from "@/lib/origin";
 
 const WRONG = { error: "Email atau password salah" };
 
@@ -93,7 +94,7 @@ export async function handleLogin(req: NextRequest, issueToken: boolean) {
   void audit({ action: "SESSION_CREATE", userId: user.id, entity: "Session", entityId: session.id, req });
 
   if (!known) {
-    const link = `${req.nextUrl.origin}/#sessions`;
+    const link = `${publicOrigin()}/#sessions`;
     void sendMail({
       to: user.email,
       subject: "Login baru di Finwise",

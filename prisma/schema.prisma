@@ -37,7 +37,9 @@ model Session {
   id         Int       @id @default(autoincrement())
   userId     Int
   // Refresh token disimpan sebagai hash SHA-256, bukan token mentah.
-  tokenHash  String    @unique @db.VarChar(64)
+  tokenHash         String    @unique @db.VarChar(64)
+  // Hash token sebelumnya dipakai untuk mendeteksi replay/Reuse setelah rotasi.
+  previousTokenHash String?   @unique @db.VarChar(64)
   label      String    @db.VarChar(191)
   ip         String?   @db.VarChar(191)
   createdAt  DateTime  @default(now())

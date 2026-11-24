@@ -136,7 +136,11 @@ async function call(
   const r = await fetch(API + path, {
     method,
     redirect: "error",
-    headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Finwise-Client": "native",
+      ...(t ? { Authorization: `Bearer ${t}` } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (r.status === 401 && t && !path.startsWith("/api/auth/")) {
@@ -145,7 +149,11 @@ async function call(
       const retry = await fetch(API + path, {
         method,
         redirect: "error",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${fresh.token}` },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Finwise-Client": "native",
+          Authorization: `Bearer ${fresh.token}`,
+        },
         body: body ? JSON.stringify(body) : undefined,
       });
       return { ok: retry.ok, status: retry.status, d: await retry.json().catch(() => ({})) };

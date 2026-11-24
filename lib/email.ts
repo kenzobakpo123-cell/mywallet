@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { escapeHtml } from "@/lib/html";
 
 const apiKey = process.env.RESEND_API_KEY;
 const from = process.env.EMAIL_FROM || "Finwise <onboarding@resend.dev>";
@@ -23,14 +24,17 @@ export async function sendMail(mail: Mail): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
-const shell = (title: string, body: string, link: string, label: string) => `
+const shell = (title: string, body: string, link: string, label: string) => {
+  const safeLink = escapeHtml(link);
+  return `
 <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#1d2b25">
-  <h2 style="color:#1f7a5a">${title}</h2>
+  <h2 style="color:#1f7a5a">${escapeHtml(title)}</h2>
   <p>${body}</p>
-  <p><a href="${link}" style="background:#1f7a5a;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block">${label}</a></p>
-  <p style="color:#78857e;font-size:12px">Kalau tombol tidak bekerja, salin alamat ini ke browser:<br />${link}</p>
+  <p><a href="${safeLink}" style="background:#1f7a5a;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none;display:inline-block">${escapeHtml(label)}</a></p>
+  <p style="color:#78857e;font-size:12px">Kalau tombol tidak bekerja, salin alamat ini ke browser:<br />${safeLink}</p>
   <p style="color:#78857e;font-size:12px">Tautan ini berlaku terbatas. Kalau kamu tidak meminta ini, abaikan email ini.</p>
 </div>`;
+};
 
 export const verificationEmail = (link: string) =>
   shell("Verifikasi email Finwise", "Terima kasih sudah daftar. Verifikasi alamat emailmu untuk mengaktifkan akun.", link, "Verifikasi email");
@@ -42,7 +46,7 @@ export const resetEmail = (link: string) =>
 export const loginNoticeEmail = (link: string, device: string, ip: string) =>
   shell(
     "Login baru di Finwise",
-    `Ada proses masuk ke akunmu dari <strong>${device}</strong>${ip ? ` (IP ${ip})` : ""}. ` +
+    `Ada proses masuk ke akunmu dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
       "Kalau itu kamu, tidak perlu melakukan apa pun. Kalau bukan kamu, buka halaman kelola perangkat untuk mencabut sesi tersebut dan ganti password.",
     link,
     "Kelola perangkat",

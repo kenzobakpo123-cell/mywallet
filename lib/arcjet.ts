@@ -6,6 +6,9 @@ import { clientKey, rateLimit } from "@/lib/security";
  * Arcjet dipakai untuk Shield (WAF), validasi email, dan rate limit terpusat.
  * Kalau ARCJET_KEY belum diisi (misal di lokal sebelum daftar), sistem jatuh ke
  * rate limiter in-memory supaya aplikasi tetap bisa dipakai.
+ *
+ * Kalau Arcjet sedang error, kita TIDAK fail-open: fallback in-memory dipakai
+ * dengan batas lebih ketat sehingga endpoint auth tidak menjadi wildcard.
  */
 const key = process.env.ARCJET_KEY;
 
@@ -29,13 +32,14 @@ type Verdict = { denied: boolean; status: number; error: string; retryAfter: num
 
 const allow = (): Verdict => ({ denied: false, status: 200, error: "", retryAfter: 0 });
 
+const FALLBACK_LIMITS: Record<GuardName, { limit: number; window: number }> = {
+  login: { limit: 10, window: 15 * 60_000 },
+  register: { limit: 3, window: 60 * 60_000 },
+  write: { limit: 30, window: 60_000 },
+};
+
 function fallback(name: GuardName, req: NextRequest): Verdict {
-  const limits: Record<GuardName, { limit: number; window: number }> = {
-    login: { limit: 30, window: 15 * 60_000 },
-    register: { limit: 5, window: 60 * 60_000 },
-    write: { limit: 60, window: 60_000 },
-  };
-  const { limit, window } = limits[name];
+  const { limit, window } = FALLBACK_LIMITS[name];
   const hit = rateLimit(clientKey(req, name), limit, window);
   return hit.allowed
     ? allow()
@@ -55,8 +59,7 @@ export async function protectArcjet(req: NextRequest, name: GuardName, email?: s
 
     if (decision.isErrored()) {
       console.error("Arcjet error:", decision.reason.message);
-      // Fail open: gangguan Arcjet tidak boleh mematikan aplikasi.
-      return allow();
+      return fallback(name, req);
     }
 
     if (decision.isDenied()) {
@@ -83,6 +86,6 @@ export async function protectArcjet(req: NextRequest, name: GuardName, email?: s
     return allow();
   } catch (error) {
     console.error("Arcjet exception:", error);
-    return allow();
+    return fallback(name, req);
   }
 }

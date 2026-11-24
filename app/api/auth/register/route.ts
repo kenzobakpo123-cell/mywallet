@@ -7,8 +7,12 @@ import { protectArcjet } from "@/lib/arcjet";
 import { hashToken, newToken } from "@/lib/tokens";
 import { sendMail, verificationEmail } from "@/lib/email";
 import { audit } from "@/lib/audit";
+import { publicOrigin } from "@/lib/origin";
+import { forbidden, isSameOrigin } from "@/lib/security";
 
 export async function POST(req: NextRequest) {
+  if (!isSameOrigin(req)) return forbidden();
+
   const p = authSchema.safeParse(await req.json().catch(() => null));
   if (!p.success || !p.data.name) {
     return NextResponse.json({ error: "Nama, email, dan password (min. 8 karakter, maks. 72 byte) wajib diisi" }, { status: 400 });
@@ -45,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   void audit({ action: "REGISTER", userId: createdId, entity: "User", entityId: createdId, req });
 
-  const link = `${req.nextUrl.origin}/api/auth/verify-email?token=${rawToken}`;
+  const link = `${publicOrigin()}/api/auth/verify-email?token=${rawToken}`;
   try {
     await sendMail({ to: email, subject: "Verifikasi email Finwise", html: verificationEmail(link) });
     return NextResponse.json({ ok: true, message: "Akun dibuat. Cek email untuk verifikasi." }, { status: 201 });

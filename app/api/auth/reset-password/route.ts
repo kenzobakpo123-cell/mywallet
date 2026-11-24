@@ -6,10 +6,13 @@ import { passwordSchema } from "@/lib/schemas";
 import { protectArcjet } from "@/lib/arcjet";
 import { hashToken } from "@/lib/tokens";
 import { audit } from "@/lib/audit";
+import { forbidden, isSameOrigin } from "@/lib/security";
 
 const schema = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/), password: passwordSchema });
 
 export async function POST(req: NextRequest) {
+  if (!isSameOrigin(req)) return forbidden();
+
   const p = schema.safeParse(await req.json().catch(() => null));
   if (!p.success) {
     return NextResponse.json({ error: "Token tidak valid atau password tidak memenuhi syarat" }, { status: 400 });

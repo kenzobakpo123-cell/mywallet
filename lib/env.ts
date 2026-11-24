@@ -6,6 +6,13 @@ const schema = z.object({
   ARCJET_KEY: z.string().startsWith("ajkey_"),
   RESEND_API_KEY: z.string().startsWith("re_"),
   EMAIL_FROM: z.string().min(3),
+  APP_URL: z
+    .string()
+    .url()
+    .refine((value) => {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password;
+    }, "APP_URL harus HTTPS dan tanpa kredensial"),
 });
 
 let checked = false;

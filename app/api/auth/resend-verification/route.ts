@@ -5,11 +5,15 @@ import { protectArcjet } from "@/lib/arcjet";
 import { hashToken, newToken } from "@/lib/tokens";
 import { sendMail, verificationEmail } from "@/lib/email";
 import { audit } from "@/lib/audit";
+import { publicOrigin } from "@/lib/origin";
+import { forbidden, isSameOrigin, rateLimit } from "@/lib/security";
 
 const schema = z.object({ email: z.string().trim().toLowerCase().email().max(120) });
 const GENERIC = { ok: true, message: "Kalau akun belum terverifikasi, email verifikasi sudah dikirim." };
 
 export async function POST(req: NextRequest) {
+  if (!isSameOrigin(req)) return forbidden();
+
   const p = schema.safeParse(await req.json().catch(() => null));
   if (!p.success) return NextResponse.json({ error: "Alamat email tidak valid" }, { status: 400 });
 
@@ -17,6 +21,14 @@ export async function POST(req: NextRequest) {
   if (guard.denied) {
     const headers = guard.retryAfter ? { "Retry-After": String(guard.retryAfter) } : undefined;
     return NextResponse.json({ error: guard.error }, { status: guard.status, headers });
+  }
+
+  const byEmail = rateLimit(`resend:${p.data.email}`, 3, 15 * 60_000);
+  if (!byEmail.allowed) {
+    return NextResponse.json(
+      { error: `Terlalu banyak permintaan untuk email ini. Coba lagi ${byEmail.retryAfter} detik.` },
+      { status: 429, headers: { "Retry-After": String(byEmail.retryAfter) } },
+    );
   }
 
   const user = await db.user.findUnique({
@@ -33,7 +45,7 @@ export async function POST(req: NextRequest) {
     data: { verificationToken: hashToken(rawToken), verificationExpires: new Date(Date.now() + 24 * 60 * 60_000) },
   });
 
-  const link = `${req.nextUrl.origin}/api/auth/verify-email?token=${rawToken}`;
+  const link = `${publicOrigin()}/api/auth/verify-email?token=${rawToken}`;
   try {
     await sendMail({ to: p.data.email, subject: "Verifikasi email Finwise", html: verificationEmail(link) });
   } catch (error) {

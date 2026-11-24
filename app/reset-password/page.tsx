@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useSyncExternalStore, useState } from "react";
+import { useEffect, useSyncExternalStore, useState } from "react";
 
 const subscribe = () => () => {};
 const readToken = () => new URLSearchParams(window.location.search).get("token") ?? "";
@@ -12,6 +12,12 @@ export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
+
+  // Token sudah tersimpan di `token`. Buang dari URL supaya tidak tertinggal di
+  // history browser, tab sync, atau log proxy.
+  useEffect(() => {
+    if (window.location.search) window.history.replaceState(null, "", window.location.pathname);
+  }, []);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();

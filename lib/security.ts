@@ -1,6 +1,7 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
+import { isAllowedWebOrigin } from "@/lib/origin";
 
-/** Rate limiter in-memory. Untuk multi-instance, ganti dengan Redis/Upstash. */
+/** Rate limiter in-memory. Dipakai sebagai fallback bila Arcjet sedang error. */
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 let lastCleanup = 0;
@@ -23,11 +24,22 @@ export function rateLimit(key: string, limit: number, windowMs: number) {
   return { allowed: true, retryAfter: 0 };
 }
 
-/** IP klien: hanya hop pertama x-forwarded-for, dan dibatasi karakternya. */
+const IP_PATTERN = /^[0-9a-fA-F.:]+$/;
+
+/**
+ * IP klien dari proxy yang dipercaya.
+ *
+ * - Vercel mengirim `x-vercel-forwarded-for` yang tidak bisa diatur klien.
+ * - `x-forwarded-for` adalah rantai; hop TERAKHIR ditambahkan proxy terdekat,
+ *   jadi hop pertama bisa dipalsukan klien dan tidak boleh dipakai.
+ */
 export function clientIp(req: NextRequest): string | null {
-  const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  const vercelHop = req.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
+  const forwarded = req.headers.get("x-forwarded-for")?.split(",").map((part) => part.trim()).filter(Boolean);
+  const lastHop = forwarded?.[forwarded.length - 1];
   const real = req.headers.get("x-real-ip")?.trim();
-  const candidate = forwarded && /^[0-9a-fA-F.:]+$/.test(forwarded) ? forwarded : real && /^[0-9a-fA-F.:]+$/.test(real) ? real : null;
+
+  const candidate = [vercelHop, lastHop, real].find((value) => value && IP_PATTERN.test(value));
   return candidate ? candidate.slice(0, 191) : null;
 }
 
@@ -35,15 +47,26 @@ export function clientKey(req: NextRequest, scope: string): string {
   return `${scope}:${clientIp(req) ?? "unknown"}`;
 }
 
-/** Tolak permintaan mutation lintas origin (CSRF). Klien native tidak mengirim Origin. */
+/**
+ * CSRF guard untuk mutation berbasis cookie.
+ *
+ * - Klien native memakai Bearer atau header `X-Finwise-Client: native`.
+ *   Browser tidak bisa mengirim keduanya lintas origin tanpa preflight CORS,
+ *   jadi keduanya aman dari CSRF.
+ * - Web wajib mengirim Origin dari APP_URL. Request tanpa Origin hanya
+ *   diterima bila browser menandai same-origin / none lewat Sec-Fetch-Site.
+ */
 export function isSameOrigin(req: NextRequest): boolean {
+  const auth = req.headers.get("authorization");
+  if (auth?.startsWith("Bearer ")) return true;
+  if (req.headers.get("x-finwise-client") === "native") return true;
+
   const origin = req.headers.get("origin");
-  if (!origin) return true;
-  try {
-    return new URL(origin).host === req.nextUrl.host;
-  } catch {
-    return false;
-  }
+  const fetchSite = req.headers.get("sec-fetch-site");
+
+  if (!origin) return fetchSite === "same-origin" || fetchSite === "none";
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return false;
+  return isAllowedWebOrigin(origin);
 }
 
 export const forbidden = () => new Response("Forbidden", { status: 403 });
