@@ -11,9 +11,11 @@ const key = process.env.ARCJET_KEY;
 
 const base = key ? arcjet({ key, rules: [shield({ mode: "LIVE" })] }) : null;
 
+// `login` hanya dipakai saat verifikasi password. Refresh, resend, dan forgot
+// memakai `write` supaya tidak menguras kuota login pengguna yang sedang aktif.
 const guards = base
   ? {
-      login: base.withRule(slidingWindow({ mode: "LIVE", interval: "15m", max: 10 })),
+      login: base.withRule(slidingWindow({ mode: "LIVE", interval: "15m", max: 30 })),
       register: base
         .withRule(validateEmail({ mode: "LIVE", deny: ["DISPOSABLE", "INVALID", "NO_MX_RECORDS"] }))
         .withRule(slidingWindow({ mode: "LIVE", interval: "1h", max: 5 })),
@@ -29,7 +31,7 @@ const allow = (): Verdict => ({ denied: false, status: 200, error: "", retryAfte
 
 function fallback(name: GuardName, req: NextRequest): Verdict {
   const limits: Record<GuardName, { limit: number; window: number }> = {
-    login: { limit: 10, window: 15 * 60_000 },
+    login: { limit: 30, window: 15 * 60_000 },
     register: { limit: 5, window: 60 * 60_000 },
     write: { limit: 60, window: 60_000 },
   };

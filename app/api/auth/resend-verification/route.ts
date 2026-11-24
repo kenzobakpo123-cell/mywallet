@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
   const p = schema.safeParse(await req.json().catch(() => null));
   if (!p.success) return NextResponse.json({ error: "Alamat email tidak valid" }, { status: 400 });
 
-  const guard = await protectArcjet(req, "login");
+  const guard = await protectArcjet(req, "write");
   if (guard.denied) {
     const headers = guard.retryAfter ? { "Retry-After": String(guard.retryAfter) } : undefined;
     return NextResponse.json({ error: guard.error }, { status: guard.status, headers });

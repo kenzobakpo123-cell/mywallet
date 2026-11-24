@@ -18,7 +18,7 @@ const unauthorized = () => NextResponse.json({ error: "Sesi sudah berakhir. Sila
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return forbidden();
 
-  const guard = await protectArcjet(req, "login");
+  const guard = await protectArcjet(req, "write");
   if (guard.denied) {
     const headers = guard.retryAfter ? { "Retry-After": String(guard.retryAfter) } : undefined;
     return NextResponse.json({ error: guard.error }, { status: guard.status, headers });
