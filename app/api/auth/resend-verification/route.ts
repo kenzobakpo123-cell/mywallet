@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     data: { verificationToken: hashToken(rawToken), verificationExpires: new Date(Date.now() + 24 * 60 * 60_000) },
   });
 
-  const link = `${req.nextUrl.origin}/verify-email?token=${rawToken}`;
+  const link = `${req.nextUrl.origin}/api/auth/verify-email?token=${rawToken}`;
   try {
     await sendMail({ to: p.data.email, subject: "Verifikasi email Finwise", html: verificationEmail(link) });
   } catch (error) {

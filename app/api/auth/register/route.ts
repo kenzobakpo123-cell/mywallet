@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   void audit({ action: "REGISTER", userId: createdId, entity: "User", entityId: createdId, req });
 
-  const link = `${req.nextUrl.origin}/verify-email?token=${rawToken}`;
+  const link = `${req.nextUrl.origin}/api/auth/verify-email?token=${rawToken}`;
   try {
     await sendMail({ to: email, subject: "Verifikasi email Finwise", html: verificationEmail(link) });
     return NextResponse.json({ ok: true, message: "Akun dibuat. Cek email untuk verifikasi." }, { status: 201 });
