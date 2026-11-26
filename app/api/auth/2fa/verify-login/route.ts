@@ -7,7 +7,8 @@ import { deviceLabel } from "@/lib/device";
 import { recoveryUsedEmail, sendMail } from "@/lib/email";
 import { completeLogin } from "@/lib/login";
 import { publicOrigin } from "@/lib/origin";
-import { clientIp, forbidden, isSameOrigin, rateLimit } from "@/lib/security";
+import { clientIp, forbidden, isSameOrigin } from "@/lib/security";
+import { dbRateLimit } from "@/lib/rate-limit-db";
 import { consumeRecoveryCode } from "@/lib/two-factor-recovery";
 import { decryptTotpSecret, verifyTotp, verifyTwoFactorChallenge } from "@/lib/two-factor";
 
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: guard.error }, { status: guard.status, headers });
   }
 
-  const limited = rateLimit(`2fa:${clientIp(req) ?? "unknown"}`, 10, 15 * 60_000);
+  const limited = await dbRateLimit(`2fa:${clientIp(req) ?? "unknown"}`, 10, 15 * 60_000);
   if (!limited.allowed) {
     return NextResponse.json(
       { error: `Terlalu banyak percobaan 2FA. Coba lagi ${limited.retryAfter} detik.` },

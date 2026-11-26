@@ -57,10 +57,11 @@
 - Pendaftaran dan reset password memakai password minimal 12 karakter, tidak boleh kata umum, angka saja, atau pengulangan berlebih. Login akun lama tetap menerima password minimal 8 karakter.
 - Percobaan login dengan password salah pada akun yang benar memicu email peringatan (maksimal satu per 15 menit). Setelah 3 kegagalan, semua sesi dan token akses dicabut otomatis dan email lockout dikirim. Pemakaian kode pemulihan, reset password, pembuatan ulang kode pemulihan, dan penonaktifan 2FA juga memicu notifikasi.
 - Menu **Lihat aktivitas** menampilkan audit log milik akun sendiri: login, perubahan profil/anggaran, 2FA, reset password, dan lockout.
-- Lupa password dan kirim ulang verifikasi tersedia di halaman masuk. Reset password juga menaikkan `tokenVersion`.
-- Rate limit, Shield/WAF, dan validasi email memakai **Arcjet** (`ARCJET_KEY`). Tanpa key, sistem jatuh ke rate limiter in-memory untuk lokal.
+- Lupa password dan kirim ulang verifikasi tersedia di halaman masuk. Reset password juga menaikkan `tokenVersion`. Untuk akun yang memakai 2FA, tautan email saja tidak cukup: reset password wajib disertai kode authenticator atau kode pemulihan.
+- Rate limit, Shield/WAF, dan validasi email memakai **Arcjet** (`ARCJET_KEY`). Untuk endpoint kritis (login, verifikasi 2FA, permintaan reset, notifikasi login), pembatasan laju juga tersimpan di tabel `RateLimit` agar berbagi di semua instance serverless. Tanpa Arcjet, sistem tetap punya rate limiter in-memory untuk lokal.
 - MySQL bisa dijalankan via Docker: `docker compose up -d` (port `3307` agar tidak bentrok dengan XAMPP). `.env` lalu pakai `mysql://finwise:finwise-rahasia@localhost:3307/keuangan`.
 - Jangan commit file `.env` dengan secret asli. Rotasi `JWT_SECRET` jika pernah terekspos.
+- Dependabot memeriksa dependency npm dan GitHub Actions tiap minggu. Validasi produksi juga menolak konfigurasi jika `REQUIRE_2FA_EMAILS` berisi akun yang tidak tercantum di `ALLOWED_EMAILS`.
 
 ## Produksi
 1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, `ALLOWED_EMAILS`, atau `REQUIRE_2FA_EMAILS` tidak valid.

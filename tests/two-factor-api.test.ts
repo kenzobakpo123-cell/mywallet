@@ -18,7 +18,11 @@ const m = vi.hoisted(() => {
     consumeRecoveryCode: vi.fn(async (): Promise<boolean> => false),
     decryptTotpSecret: vi.fn(() => "plain-secret"),
     verifyTotp: vi.fn((): boolean => true),
-    rateLimit: vi.fn((): { allowed: boolean; retryAfter: number } => ({ allowed: true, retryAfter: 0 })),
+    dbRateLimit: vi.fn(async (): Promise<{ allowed: boolean; retryAfter: number; count: number }> => ({
+      allowed: true,
+      retryAfter: 0,
+      count: 1,
+    })),
     deviceLabel: vi.fn(() => "Safari di iPhone"),
     clientIp: vi.fn((): string | null => "203.0.113.7"),
   };
@@ -37,8 +41,9 @@ vi.mock("@/lib/two-factor", async () => {
 });
 vi.mock("@/lib/security", async () => {
   const actual = await vi.importActual<typeof import("@/lib/security")>("@/lib/security");
-  return { ...actual, rateLimit: m.rateLimit, clientIp: m.clientIp };
+  return { ...actual, clientIp: m.clientIp };
 });
+vi.mock("@/lib/rate-limit-db", () => ({ dbRateLimit: m.dbRateLimit }));
 
 import { POST } from "@/app/api/auth/2fa/verify-login/route";
 import { signTwoFactorChallenge } from "@/lib/two-factor";
@@ -74,7 +79,7 @@ describe("POST /api/auth/2fa/verify-login", () => {
     process.env.JWT_SECRET = JWT;
     vi.clearAllMocks();
     m.db.user.findUnique.mockResolvedValue(user);
-    m.rateLimit.mockReturnValue({ allowed: true, retryAfter: 0 });
+    m.dbRateLimit.mockResolvedValue({ allowed: true, retryAfter: 0, count: 1 });
     m.consumeRecoveryCode.mockResolvedValue(false);
     m.verifyTotp.mockReturnValue(true);
     m.protectArcjet.mockResolvedValue({ denied: false });
@@ -136,7 +141,7 @@ describe("POST /api/auth/2fa/verify-login", () => {
 
   it("menghormati pembatasan laju", async () => {
     const token = await challenge();
-    m.rateLimit.mockReturnValueOnce({ allowed: false, retryAfter: 23 });
+    m.dbRateLimit.mockResolvedValueOnce({ allowed: false, retryAfter: 23, count: 11 });
     const res = await POST(request({ challengeToken: token, code: "123456" }));
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("23");

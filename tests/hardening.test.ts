@@ -17,7 +17,7 @@ const m = vi.hoisted(() => ({
   sendMail: vi.fn(async () => {}),
   deviceLabel: vi.fn(() => "Safari"),
   clientIp: vi.fn((): string | null => "203.0.113.7"),
-  rateLimit: vi.fn((key: string) => ({
+  dbRateLimit: vi.fn(async (key: string) => ({
     allowed: true,
     retryAfter: 0,
     count: key.startsWith("login-email:") ? m.attempts : 1,
@@ -34,8 +34,9 @@ vi.mock("@/lib/email", async () => {
 vi.mock("@/lib/device", () => ({ deviceLabel: m.deviceLabel }));
 vi.mock("@/lib/security", async () => {
   const actual = await vi.importActual<typeof import("@/lib/security")>("@/lib/security");
-  return { ...actual, rateLimit: m.rateLimit, clientIp: m.clientIp };
+  return { ...actual, clientIp: m.clientIp };
 });
+vi.mock("@/lib/rate-limit-db", () => ({ dbRateLimit: m.dbRateLimit }));
 
 import { requiresTwoFactor } from "@/lib/allowlist";
 import { handleLogin } from "@/lib/login";
@@ -88,7 +89,7 @@ describe("login dengan 2FA wajib", () => {
     m.db.user.findUnique.mockResolvedValue(user);
     m.db.user.update.mockResolvedValue({});
     m.db.session.updateMany.mockResolvedValue({ count: 1 });
-    m.rateLimit.mockImplementation((key: string) => ({
+    m.dbRateLimit.mockImplementation(async (key: string) => ({
       allowed: true,
       retryAfter: 0,
       count: key.startsWith("login-email:") ? m.attempts : 1,

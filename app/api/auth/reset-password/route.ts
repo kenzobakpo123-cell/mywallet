@@ -10,8 +10,15 @@ import { deviceLabel } from "@/lib/device";
 import { passwordChangedEmail, sendMail } from "@/lib/email";
 import { publicOrigin } from "@/lib/origin";
 import { clientIp, forbidden, isSameOrigin } from "@/lib/security";
+import { consumeRecoveryCode } from "@/lib/two-factor-recovery";
+import { decryptTotpSecret, verifyTotp } from "@/lib/two-factor";
 
-const schema = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/), password: strongPasswordSchema });
+const schema = z.object({
+  token: z.string().regex(/^[a-f0-9]{64}$/),
+  password: strongPasswordSchema,
+  // Wajib kalau akun memakai 2FA; email saja tidak cukup untuk mengubah password.
+  code: z.string().trim().min(1).optional(),
+});
 
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return forbidden();
@@ -31,8 +38,35 @@ export async function POST(req: NextRequest) {
     passwordResetToken: hashToken(p.data.token),
     passwordResetExpires: { gt: new Date() },
   };
-  const user = await db.user.findFirst({ where, select: { id: true, email: true } });
+  const user = await db.user.findFirst({
+    where,
+    select: { id: true, email: true, twoFactorEnabled: true, twoFactorSecret: true },
+  });
   if (!user) return NextResponse.json({ error: "Tautan reset tidak valid atau sudah kedaluwarsa" }, { status: 400 });
+
+  // Tautan dari email bukan satu-satunya bukti: akun ber-2FA harus membuktikan
+  // kepemilikan authenticator/kode pemulihan sebelum password bisa diganti.
+  if (user.twoFactorEnabled) {
+    if (!p.data.code) {
+      return NextResponse.json(
+        { error: "Akun ini memakai 2FA. Masukkan kode authenticator atau kode pemulihan." },
+        { status: 400 },
+      );
+    }
+    let codeOk = false;
+    try {
+      codeOk = await consumeRecoveryCode(user.id, p.data.code);
+      if (!codeOk && user.twoFactorSecret) {
+        codeOk = verifyTotp(decryptTotpSecret(user.twoFactorSecret), p.data.code);
+      }
+    } catch {
+      codeOk = false;
+    }
+    if (!codeOk) {
+      void audit({ action: "PASSWORD_RESET_2FA_FAILED", userId: user.id, req });
+      return NextResponse.json({ error: "Kode 2FA tidak cocok." }, { status: 400 });
+    }
+  }
 
   // passwordHash diperbarui, token dihapus, dan sesi lama dicabut.
   const r = await db.user.updateMany({

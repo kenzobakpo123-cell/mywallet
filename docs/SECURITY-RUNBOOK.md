@@ -7,7 +7,7 @@ Dokumen ini berisi prosedur singkat untuk menjaga akses dan memulihkan kondisi d
 Lakukan rotasi setiap 90 hari, atau segera kalau ada indikasi kebocoran.
 
 1. `JWT_SECRET`: buat nilai acak minimal 32 karakter, update di Vercel (Production + Preview), lalu deploy ulang. Semua sesi lama akan otomatis tidak valid.
-2. Password database Railway: ganti lewat Railway Dashboard, lalu update `DATABASE_URL` di Vercel. Deploy ulang.
+2. Password database Railway: ganti lewat Railway Dashboard, lalu update `DATABASE_URL` di Vercel dan GitHub Secret `DATABASE_URL`. Deploy ulang. Aplikasi produksi memakai user aplikasi dengan hak minimum, bukan `root`; `root` hanya dipakai untuk administrasi/migrasi darurat.
 3. `ARCJET_KEY` dan `RESEND_API_KEY`: buat key baru di dashboard masing-masing, update di Vercel, deploy ulang, lalu cabut key lama.
 4. `BACKUP_PASSPHRASE`: simpan di password manager. Kalau diganti, enkripsi ulang arsip backup lama.
 
@@ -21,6 +21,7 @@ Lakukan rotasi setiap 90 hari, atau segera kalau ada indikasi kebocoran.
 
 ## Respons insiden
 
+- Reset password untuk akun ber-2FA kini mewajibkan kode authenticator atau kode pemulihan. Kalau keduanya hilang, verifikasi identitas pemilik dulu lewat email, lalu nonaktifkan 2FA dengan kode pemulihan terakhir atau reset manual oleh admin database.
 - Jika ada email peringatan login gagal/lockout: buka **Pengaturan → Lihat aktivitas** dan **Kelola perangkat**.
 - Jika 2FA dinonaktifkan atau password diubah tanpa sepengetahuan pemilik: ganti password, aktifkan kembali 2FA, cabut semua sesi, dan rotasi `JWT_SECRET`.
 - Jika kode pemulihan dipakai: buat kode pemulihan baru dari **Pengaturan → Verifikasi dua faktor**.

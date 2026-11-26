@@ -32,5 +32,20 @@ export function assertProdEnv(): void {
     const fields = parsed.error.issues.map((issue) => issue.path.join(".")).join(", ");
     throw new Error(`Konfigurasi produksi tidak valid: ${fields}`);
   }
+
+  // Cegah typo: akun yang diwajibkan 2FA harus tetap bisa mendaftar.
+  const entries = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+  const allowed = entries(parsed.data.ALLOWED_EMAILS);
+  const required = entries(parsed.data.REQUIRE_2FA_EMAILS);
+  const covered = (email: string) =>
+    allowed.some((item) => (item.startsWith("@") ? email.endsWith(item) : item === email));
+  if (required.some((email) => !email.startsWith("@") && !covered(email))) {
+    throw new Error("REQUIRE_2FA_EMAILS mengandung akun yang tidak ada di ALLOWED_EMAILS");
+  }
+
   checked = true;
 }

@@ -10,6 +10,7 @@ export default function ResetPasswordPage() {
   // Token ada di URL, dibaca sebagai snapshot klien tanpa setState di effect.
   const token = useSyncExternalStore(subscribe, readToken, serverToken);
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
 
@@ -25,7 +26,7 @@ export default function ResetPasswordPage() {
     const r = await fetch("/api/auth/reset-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, password }),
+      body: JSON.stringify({ token, password, ...(code.trim() ? { code: code.trim() } : {}) }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) return setMessage(d.error ?? "Gagal mengubah password");
@@ -44,14 +45,23 @@ export default function ResetPasswordPage() {
             <label>Password baru
               <input
                 type="password"
-                minLength={8}
+                minLength={12}
                 maxLength={100}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Minimal 8 karakter"
+                placeholder="Minimal 12 karakter"
                 required
               />
             </label>
+            <label>Kode 2FA / kode pemulihan
+              <input
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="Wajib kalau 2FA aktif"
+              />
+            </label>
+            <p className="modal-note">Tautan email saja tidak cukup untuk akun yang sudah memakai 2FA.</p>
             {message && <p className={done ? "success" : "err"}>{message}</p>}
             <button className="primary-button" type="submit" disabled={!token || done}>Simpan password</button>
           </form>

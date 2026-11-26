@@ -5,7 +5,8 @@ import { REFRESH_TOKEN_MAX_AGE, signToken } from "@/lib/auth";
 import { setAuthCookies } from "@/lib/cookies";
 import { deviceLabel } from "@/lib/device";
 import { authSchema } from "@/lib/schemas";
-import { clientIp, rateLimit } from "@/lib/security";
+import { clientIp } from "@/lib/security";
+import { dbRateLimit } from "@/lib/rate-limit-db";
 import { hashToken, newToken } from "@/lib/tokens";
 import { protectArcjet } from "@/lib/arcjet";
 import { loginFailedEmail, loginNoticeEmail, securityLockoutEmail, sendMail } from "@/lib/email";
@@ -28,9 +29,9 @@ type LoginUser = {
   twoFactorEnabled?: boolean;
 };
 
-function notifyLockout(email: string, req: NextRequest): void {
-  // Maksimal satu email lockout per akun per 15 menit.
-  const hit = rateLimit(`login-lockout-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
+async function notifyLockout(email: string, req: NextRequest): Promise<void> {
+  // Maksimal satu email lockout per akun per 15 menit, tersimpan di database.
+  const hit = await dbRateLimit(`login-lockout-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
   if (!hit.allowed) return;
 
   const link = `${publicOrigin()}/#security`;
@@ -41,9 +42,9 @@ function notifyLockout(email: string, req: NextRequest): void {
   }).catch((error) => console.error("Gagal mengirim notifikasi penguncian:", error));
 }
 
-function notifyFailedLogin(email: string, req: NextRequest): void {
-  // Satu notifikasi per email per 15 menit untuk menghindari email bombing.
-  const hit = rateLimit(`login-fail-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
+async function notifyFailedLogin(email: string, req: NextRequest): Promise<void> {
+  // Satu notifikasi per email per 15 menit, tersimpan di database.
+  const hit = await dbRateLimit(`login-fail-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
   if (!hit.allowed) return;
 
   const link = `${publicOrigin()}/#sessions`;
@@ -131,7 +132,7 @@ export async function handleLogin(req: NextRequest, issueToken: boolean) {
   }
 
   const { email, password } = parsed.data;
-  const byEmail = rateLimit(`login-email:${email}`, 5, 15 * 60_000);
+  const byEmail = await dbRateLimit(`login-email:${email}`, 5, 15 * 60_000);
   if (!byEmail.allowed) {
     await bcrypt.compare(password, DUMMY_HASH);
     const headers = { "Retry-After": String(byEmail.retryAfter) };
@@ -164,9 +165,9 @@ export async function handleLogin(req: NextRequest, issueToken: boolean) {
         });
         await db.user.update({ where: { id: user.id }, data: { tokenVersion: { increment: 1 } } });
         void audit({ action: "SUSPICIOUS_LOGIN_LOCKOUT", userId: user.id, entity: "User", entityId: user.id, req });
-        notifyLockout(user.email, req);
+        await notifyLockout(user.email, req);
       } else {
-        notifyFailedLogin(user.email, req);
+        await notifyFailedLogin(user.email, req);
       }
     }
     return NextResponse.json(WRONG, { status: 401 });

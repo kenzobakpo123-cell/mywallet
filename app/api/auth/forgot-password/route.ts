@@ -6,7 +6,8 @@ import { hashToken, newToken } from "@/lib/tokens";
 import { resetEmail, sendMail } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { publicOrigin } from "@/lib/origin";
-import { forbidden, isSameOrigin, rateLimit } from "@/lib/security";
+import { forbidden, isSameOrigin } from "@/lib/security";
+import { dbRateLimit } from "@/lib/rate-limit-db";
 
 const schema = z.object({ email: z.string().trim().toLowerCase().email().max(120) });
 const GENERIC = { ok: true, message: "Kalau email terdaftar, tautan reset password sudah dikirim." };
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   // Batasi juga per email: IP saja bisa diputar penyerang, dan endpoint ini
   // mengirim email nyata yang biaya & dampaknya langsung terasa bagi korban.
-  const byEmail = rateLimit(`forgot:${p.data.email}`, 3, 15 * 60_000);
+  const byEmail = await dbRateLimit(`forgot:${p.data.email}`, 3, 15 * 60_000);
   if (!byEmail.allowed) {
     return NextResponse.json(
       { error: `Terlalu banyak permintaan untuk email ini. Coba lagi ${byEmail.retryAfter} detik.` },

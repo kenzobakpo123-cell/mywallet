@@ -126,6 +126,18 @@ model Budget {
   @@index([userId, month])
 }
 
+/** Rate limit bersama lintas instance serverless untuk endpoint kritis. */
+model RateLimit {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique @db.VarChar(191)
+  count     Int
+  resetAt   DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}
+
 model AuditLog {
   id        Int      @id @default(autoincrement())
   userId    Int?
