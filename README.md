@@ -29,8 +29,16 @@
 13. Aplikasi HP memuat profil dari server: mata uang, tanggal "hari ini", dan format angka mengikuti preferensi yang sama dengan web.
 14. Menu **Perangkat aktif** di HP menampilkan sesi dan menyediakan tombol cabut perangkat lain.
 
+## Aplikasi PWA (iOS/Android)
+1. Buka `https://mywallet-virid-eight.vercel.app` di browser HP.
+2. Android (Chrome): menu `⋮` → **Install app** / **Add to Home screen**.
+3. iOS (Safari): tombol **Bagikan** → **Tambahkan ke Layar Utama**.
+4. Ikon **Finwise** muncul di layar utama dan dibuka seperti aplikasi, tanpa Play Store/App Store.
+5. Service worker hanya menyimpan tampilan dan halaman cadangan offline. Data keuangan, cookie, dan token **tidak pernah** disimpan di cache service worker.
+6. Sanjungan pemasangan muncul otomatis di Android/Chrome bila memenuhi syarat. Di iOS, gunakan menu Bagikan seperti langkah 3.
+
 ## Catatan
-- Gunakan `Ekspor CSV` pada dashboard untuk mengunduh transaksi bulan aktif (maks. 10.000 baris per ekspor).
+- Tombol `CSV` dan `PDF` pada dashboard mengunduh **seluruh riwayat** transaksi. Filter tanggal/kategori/pencarian yang aktif ikut dipakai. Batas 20.000 baris per ekspor.
 - Riwayat web menampilkan 200 transaksi per halaman; tombol **Muat lebih banyak** mengambil halaman berikutnya dan filter tetap dipakai.
 - Dashboard sinkron antartab lewat `BroadcastChannel` dan refresh otomatis tiap 30 detik saat tab aktif.
 - Anggaran menampilkan penanda **Hampir habis** (≥80%) dan **Melewati batas** (≥100%).
@@ -56,7 +64,7 @@
 ### Deploy ke Vercel + MySQL cloud
 1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
 2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
-3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, dan `EMAIL_FROM`.
+3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, dan `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`).
 4. **Tanpa beli domain (cukup untuk mulai):** Vercel otomatis memberi `https://<nama-project>.vercel.app` — gratis, HTTPS, dan SSL otomatis. Pakai URL itu untuk web dan untuk `EXPO_PUBLIC_API_URL` di Expo. Tidak perlu mengubah DNS di IDwebhost.
 5. **Domain sendiri (opsional, berbayar):** di Vercel → **Settings → Domains → Add**, lalu di DNS registrar arahkan `A @` ke `76.76.21.21` dan `CNAME www` ke `cname.vercel-dns.com`.
 6. Resend: untuk mulai, pakai `EMAIL_FROM="Finwise <onboarding@resend.dev>"`. Domain `resend.dev` hanya bisa mengirim ke **email akun Resend kamu sendiri**. Agar bisa mengirim ke email orang lain, tambahkan domain di Resend → **Domains** dan pasang record SPF/DKIM/DMARC di DNS.

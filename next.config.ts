@@ -45,6 +45,11 @@ const nextConfig: NextConfig = {
           { key: "Pragma", value: "no-cache" },
         ],
       },
+      {
+        // Service worker harus selalu dicek ulang agar versi baru langsung aktif.
+        source: "/sw.js",
+        headers: [{ key: "Cache-Control", value: "no-cache, max-age=0, must-revalidate" }],
+      },
     ];
   },
 };
