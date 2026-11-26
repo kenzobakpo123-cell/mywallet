@@ -15,7 +15,8 @@ Lakukan rotasi setiap 90 hari, atau segera kalau ada indikasi kebocoran.
 
 - Backup manual terenkripsi: `npm run db:backup:secure` dengan `DATABASE_URL` dan `BACKUP_PASSPHRASE` (minimal 16 karakter) tersedia di environment.
 - Hasil backup berada di folder `backups/` yang sudah di-gitignore.
-- Jadwalkan backup harian dari mesin/admin yang terpercaya, lalu salin file `.enc` ke penyimpanan terpisah.
+- Workflow `.github/workflows/backup.yml` menjalankan backup harian pukul 01:00 WIB dan menyimpan artefak terenkripsi selama 90 hari. Tambahkan GitHub Secrets `DATABASE_URL` dan `BACKUP_PASSPHRASE` dulu; nilai secret sengaja tidak disimpan di repository.
+- Jadwalkan backup harian dari mesin/admin yang terpercaya juga, lalu salin file `.enc` ke penyimpanan terpisah bila artefak GitHub tidak cukup.
 - Format file: `v1.<iv>.<authTag>` di baris pertama, diikuti data SQL gzip + AES-256-GCM.
 
 ## Respons insiden

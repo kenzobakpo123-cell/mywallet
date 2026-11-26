@@ -66,7 +66,7 @@
 1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, `ALLOWED_EMAILS`, atau `REQUIRE_2FA_EMAILS` tidak valid.
 2. `docker compose -f docker-compose.prod.yml up -d --build` — menjalankan MySQL + aplikasi, dan migrasi dijalankan otomatis saat container app mulai.
 3. Health check: `GET /api/health` mengembalikan `200` kalau database terhubung.
-4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Untuk backup terenkripsi, siapkan `BACKUP_PASSPHRASE` (minimal 16 karakter) lalu jalankan `npm run db:backup:secure`. Hasil ada di folder `backups/` yang tidak ikut di-commit. Prosedur rotasi dan respons insiden ada di `docs/SECURITY-RUNBOOK.md`.
+4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Untuk backup terenkripsi, siapkan `BACKUP_PASSPHRASE` (minimal 16 karakter) lalu jalankan `npm run db:backup:secure`. Hasil ada di folder `backups/` yang tidak ikut di-commit. GitHub Actions menjalankan backup terenkripsi tiap 01:00 WIB dan menyimpan artefak 90 hari; agar jalan, tambahkan GitHub Secrets `DATABASE_URL` dan `BACKUP_PASSPHRASE` di repository. Prosedur rotasi dan respons insiden ada di `docs/SECURITY-RUNBOOK.md`.
 5. CI GitHub Actions menjalankan `lint`, `test`, `migrate`, dan `build` pada setiap push/PR.
 
 ### Deploy ke Vercel + MySQL cloud

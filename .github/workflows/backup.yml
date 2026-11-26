@@ -1,0 +1,41 @@
+name: Backup database terenkripsi
+
+on:
+  schedule:
+    # 18:00 UTC = 01:00 WIB setiap hari.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Pasang klien MySQL
+        run: sudo apt-get update && sudo apt-get install -y mysql-client
+
+      - name: Buat backup terenkripsi
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          test -n "$DATABASE_URL"
+          test -n "$BACKUP_PASSPHRASE"
+          node scripts/backup-encrypted.mjs
+
+      - name: Simpan artefak backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: finwise-backup-${{ github.run_id }}
+          path: backups/*.enc
+          retention-days: 90
+          if-no-files-found: error
