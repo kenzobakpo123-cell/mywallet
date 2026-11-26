@@ -7,7 +7,8 @@
      `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
    - Gunakan user MySQL khusus (bukan `root`) dengan hak minimum.
    - `ARCJET_KEY` didapat gratis di https://app.arcjet.com. Kalau dikosongkan, aplikasi masih jalan dengan rate limiter in-memory.
-   - `RESEND_API_KEY` + `EMAIL_FROM` dipakai untuk verifikasi email & reset password. Di development tanpa key, tautan dicetak di terminal instead of dikirim.
+   - `RESEND_API_KEY` + `EMAIL_FROM` dipakai untuk verifikasi email, reset password, dan notifikasi keamanan. Di development tanpa key, tautan dicetak di terminal instead of dikirim.
+   - `ALLOWED_EMAILS` berisi daftar email yang boleh mendaftar, dipisah koma (`@domain.com` juga boleh). Wajib di production; kosong hanya boleh di development.
 3. `npm install`
 4. `npm run db:migrate` (menerapkan file di `prisma/migrations`). Untuk lingkungan lokal saat mengubah skema, pakai `npm run db:migrate:dev`. Cek dengan `npm run db:status`.
    - `npm run db:push` tetap ada sebagai jalan pintas, tapi **tidak disarankan lagi** untuk tim/produksi karena tidak menyimpan riwayat migrasi.
@@ -28,6 +29,7 @@
 12. Menu **Lupa password?** dan **Kirim ulang verifikasi** juga tersedia di layar login HP.
 13. Aplikasi HP memuat profil dari server: mata uang, tanggal "hari ini", dan format angka mengikuti preferensi yang sama dengan web.
 14. Menu **Perangkat aktif** di HP menampilkan sesi dan menyediakan tombol cabut perangkat lain.
+15. Kalau 2FA aktif, layar login HP menanyakan kode authenticator atau kode pemulihan sebelum menyimpan token.
 
 ## Aplikasi PWA (iOS/Android)
 1. Buka `https://mywallet-virid-eight.vercel.app` di browser HP.
@@ -48,14 +50,17 @@
 - Setiap login membuat **sesi per perangkat**. Token akses berlaku 15 menit dan diperbarui otomatis lewat refresh token (30 hari) yang disimpan sebagai hash di tabel `Session`.
 - Menu **Perangkat** menampilkan perangkat aktif, IP, dan waktu terakhir dipakai. Kamu bisa mencabut satu perangkat atau semua perangkat lain. Login dari perangkat baru memicu notifikasi email.
 - **Keluar** hanya mencabut perangkat yang sedang dipakai. Reset password tetap mencabut semua sesi sekaligus.
-- Pendaftaran baru wajib verifikasi email sebelum bisa masuk. Akun lama otomatis dianggap terverifikasi oleh migrasi `20261119000100_auth_email`.
+- Pendaftaran hanya untuk email yang tercantum di `ALLOWED_EMAILS`, dan wajib verifikasi email sebelum bisa masuk. Akun lama otomatis dianggap terverifikasi oleh migrasi `20261119000100_auth_email`.
+- Menu **Verifikasi dua faktor** mengaktifkan TOTP (Google Authenticator/1Password/Authy) dengan 8 kode pemulihan sekali pakai. Kode TOTP dienkripsi AES-GCM, kode pemulihan disimpan sebagai hash SHA-256. Nonaktifkan 2FA mencabut semua sesi dan mengharuskan login ulang.
+- Percobaan login dengan password salah pada akun yang benar memicu email peringatan (maksimal satu per 15 menit). Pemakaian kode pemulihan 2FA juga memicu notifikasi.
+- Menu **Lihat aktivitas** menampilkan audit log milik akun sendiri: login, perubahan profil/anggaran, 2FA, dan reset data.
 - Lupa password dan kirim ulang verifikasi tersedia di halaman masuk. Reset password juga menaikkan `tokenVersion`.
 - Rate limit, Shield/WAF, dan validasi email memakai **Arcjet** (`ARCJET_KEY`). Tanpa key, sistem jatuh ke rate limiter in-memory untuk lokal.
 - MySQL bisa dijalankan via Docker: `docker compose up -d` (port `3307` agar tidak bentrok dengan XAMPP). `.env` lalu pakai `mysql://finwise:finwise-rahasia@localhost:3307/keuangan`.
 - Jangan commit file `.env` dengan secret asli. Rotasi `JWT_SECRET` jika pernah terekspos.
 
 ## Produksi
-1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, atau `EMAIL_FROM` tidak valid.
+1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, atau `ALLOWED_EMAILS` tidak valid.
 2. `docker compose -f docker-compose.prod.yml up -d --build` — menjalankan MySQL + aplikasi, dan migrasi dijalankan otomatis saat container app mulai.
 3. Health check: `GET /api/health` mengembalikan `200` kalau database terhubung.
 4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Hasil ada di folder `backups/`.
@@ -64,7 +69,7 @@
 ### Deploy ke Vercel + MySQL cloud
 1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
 2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
-3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, dan `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`).
+3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`), dan `ALLOWED_EMAILS`.
 4. **Tanpa beli domain (cukup untuk mulai):** Vercel otomatis memberi `https://<nama-project>.vercel.app` — gratis, HTTPS, dan SSL otomatis. Pakai URL itu untuk web dan untuk `EXPO_PUBLIC_API_URL` di Expo. Tidak perlu mengubah DNS di IDwebhost.
 5. **Domain sendiri (opsional, berbayar):** di Vercel → **Settings → Domains → Add**, lalu di DNS registrar arahkan `A @` ke `76.76.21.21` dan `CNAME www` ke `cname.vercel-dns.com`.
 6. Resend: untuk mulai, pakai `EMAIL_FROM="Finwise <onboarding@resend.dev>"`. Domain `resend.dev` hanya bisa mengirim ke **email akun Resend kamu sendiri**. Agar bisa mengirim ke email orang lain, tambahkan domain di Resend → **Domains** dan pasang record SPF/DKIM/DMARC di DNS.
@@ -76,4 +81,4 @@
 
 Deploy saat ini: `https://mywallet-virid-eight.vercel.app`.
 
-Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, dan perubahan data). Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token disimpan sebagai hash SHA-256.
+Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, 2FA, dan perubahan data) dan bisa dilihat dari menu **Pengaturan → Lihat aktivitas**. Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token dan kode pemulihan disimpan sebagai hash SHA-256; rahasia TOTP dienkripsi AES-GCM.

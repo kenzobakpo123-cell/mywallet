@@ -11,6 +11,17 @@ export type Tx = {
 
 export type Profile = { name: string; email: string; timezone: string; currency: string };
 
+export type SecurityStatus = { twoFactorEnabled: boolean; recoveryCodesRemaining: number };
+
+export type AuditInfo = {
+  id: number;
+  action: string;
+  entity: string | null;
+  entityId: number | null;
+  ip: string | null;
+  createdAt: string;
+};
+
 export type SessionInfo = {
   id: number;
   label: string;

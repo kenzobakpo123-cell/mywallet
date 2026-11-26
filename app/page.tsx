@@ -10,10 +10,12 @@ import Modal from "@/components/modal";
 import {
   EMPTY_FILTERS,
   EMPTY_SUM,
+  type AuditInfo,
   type Budget,
   type Category,
   type Filters,
   type Profile,
+  type SecurityStatus,
   type SessionInfo,
   type Sum,
   type Tx,
@@ -31,8 +33,13 @@ type Dialog =
   | { kind: "deleteCategory"; item: Category }
   | { kind: "deleteBudget"; item: Budget }
   | { kind: "confirm"; title: string; description: string; action: "revoke-session" | "revoke-others"; item?: SessionInfo }
+  | { kind: "twofaSetup" }
+  | { kind: "twofaDisable" }
+  | { kind: "audit" }
   | { kind: "reset" }
   | null;
+
+type TwoFactorSetup = { otpauthUri: string; secret: string; recoveryCodes: string[] };
 
 const NAV: { key: Section; label: string; icon: IconName }[] = [
   { key: "overview", label: "Ringkasan", icon: "home" },
@@ -42,6 +49,25 @@ const NAV: { key: Section; label: string; icon: IconName }[] = [
 ];
 
 const GOOD_NEWS = /berhasil|dibuat|terkirim|diproses|aktif|tersimpan|dicabut|dihapus/i;
+
+const AUDIT_LABELS: Record<string, string> = {
+  LOGIN_SUCCESS: "Masuk berhasil",
+  LOGIN_FAILED: "Masuk gagal",
+  LOGIN_UNVERIFIED: "Masuk ditolak · email belum diverifikasi",
+  LOGIN_2FA_REQUIRED: "Verifikasi dua faktor diminta",
+  SESSION_CREATE: "Perangkat baru masuk",
+  TWO_FACTOR_SETUP: "Menyiapkan 2FA",
+  TWO_FACTOR_ENABLED: "2FA diaktifkan",
+  TWO_FACTOR_DISABLED: "2FA dinonaktifkan",
+  TWO_FACTOR_SUCCESS: "Verifikasi 2FA berhasil",
+  TWO_FACTOR_FAILED: "Verifikasi 2FA gagal",
+  TWO_FACTOR_RECOVERY_USED: "Kode pemulihan dipakai",
+  DATA_RESET: "Data keuangan dihapus",
+};
+
+function auditLabel(action: string) {
+  return AUDIT_LABELS[action] ?? action.toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
 
 function queryFor(month: string, filters: Filters, offset?: number) {
   const params = new URLSearchParams();
@@ -89,6 +115,11 @@ export default function Home() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [resetPhrase, setResetPhrase] = useState("");
   const [busy, setBusy] = useState(false);
+  const [twoFactorChallenge, setTwoFactorChallenge] = useState("");
+  const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorSetup | null>(null);
+  const [security, setSecurity] = useState<SecurityStatus | null>(null);
+  const [audits, setAudits] = useState<AuditInfo[]>([]);
+  const [auditCursor, setAuditCursor] = useState<string | null>(null);
   const prefInitialized = useRef(false);
 
   const rp = (n: number) => formatMoney(n, profile?.currency ?? "IDR");
@@ -131,10 +162,11 @@ export default function Home() {
   useEffect(() => {
     if (authed !== true) return;
     let cancelled = false;
-    api<{ profile: Profile }>("/api/profile").then((r) => {
+    api<{ profile: Profile; security?: SecurityStatus }>("/api/profile").then((r) => {
       if (cancelled || !r.ok || !r.d.profile) return;
       const p = r.d.profile;
       setProfile(p);
+      setSecurity(r.d.security ?? null);
       setProfileForm({ name: p.name, timezone: p.timezone, currency: p.currency });
       if (!prefInitialized.current) {
         prefInitialized.current = true;
@@ -147,6 +179,14 @@ export default function Home() {
   const loadSessions = useCallback(async () => {
     const r = await api<{ items: SessionInfo[] }>("/api/sessions");
     if (r.ok && Array.isArray(r.d.items)) setSessions(r.d.items);
+  }, []);
+
+  const loadAudits = useCallback(async (reset = false, cursor?: string | null) => {
+    const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const r = await api<{ items: AuditInfo[]; nextCursor: string | null }>(`/api/audit?limit=25${suffix}`);
+    if (!r.ok || !Array.isArray(r.d.items)) return;
+    setAudits((prev) => reset || !cursor ? r.d.items : [...prev, ...r.d.items]);
+    setAuditCursor(r.d.nextCursor ?? null);
   }, []);
 
   useEffect(() => {
@@ -182,6 +222,7 @@ export default function Home() {
 
   function openSection(key: Section) {
     setActiveSection(key);
+    if (key === "settings") void loadAudits(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -190,12 +231,79 @@ export default function Home() {
     const body = Object.fromEntries(new FormData(e.currentTarget));
     const r = await api(`/api/auth/${mode}`, "POST", body);
     if (!r.ok) return setMsg(r.d.error ?? "Gagal");
+    if (r.d.twoFactorRequired && typeof r.d.challengeToken === "string") {
+      setTwoFactorChallenge(r.d.challengeToken);
+      setMsg("");
+      return;
+    }
     if (mode === "register") {
       setMode("login");
       return setMsg(r.d.message ?? r.d.warning ?? "Akun dibuat. Cek email untuk verifikasi.");
     }
     setMsg("");
     refresh();
+  }
+
+  async function submitTwoFactor(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const code = String(new FormData(e.currentTarget).get("code") ?? "").trim();
+    if (!twoFactorChallenge || !code) return;
+    const r = await api("/api/auth/2fa/verify-login", "POST", { challengeToken: twoFactorChallenge, code });
+    if (!r.ok) return setMsg(r.d.error ?? "Kode tidak cocok.");
+    setTwoFactorChallenge("");
+    setMsg("");
+    refresh();
+  }
+
+  function cancelTwoFactor() {
+    setTwoFactorChallenge("");
+    setMsg("");
+  }
+
+  async function refreshSecurity() {
+    const r = await api<{ security: SecurityStatus }>("/api/profile");
+    if (r.ok && r.d.security) setSecurity(r.d.security);
+  }
+
+  async function startTwoFactor() {
+    if (busy) return;
+    setBusy(true);
+    const r = await api<TwoFactorSetup>("/api/auth/2fa/setup", "POST", {});
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyiapkan 2FA.");
+    setTwoFactorSetup(r.d);
+    setDialog({ kind: "twofaSetup" });
+  }
+
+  async function enableTwoFactor(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!twoFactorSetup || busy) return;
+    const code = String(new FormData(e.currentTarget).get("code") ?? "").trim();
+    setBusy(true);
+    const r = await api("/api/auth/2fa/enable", "POST", {
+      code,
+      recoveryCodes: twoFactorSetup.recoveryCodes,
+    });
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal mengaktifkan 2FA.");
+    setDialog(null);
+    setTwoFactorSetup(null);
+    setMsg("Autentikasi dua faktor aktif. Simpan kode pemulihanmu di tempat aman.");
+    void refreshSecurity();
+  }
+
+  async function disableTwoFactor(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (busy) return;
+    const body = Object.fromEntries(new FormData(e.currentTarget));
+    setBusy(true);
+    const r = await api("/api/auth/2fa/disable", "POST", body);
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal menonaktifkan 2FA.");
+    setDialog(null);
+    setSecurity({ twoFactorEnabled: false, recoveryCodesRemaining: 0 });
+    setAuthed(false);
+    setMsg("2FA dinonaktifkan. Semua sesi dicabut; silakan masuk lagi.");
   }
 
   async function sendAuthEmail(kind: "forgot-password" | "resend-verification") {
@@ -425,6 +533,9 @@ export default function Home() {
         onSubmit={submitAuth}
         onAuthEmail={sendAuthEmail}
         onSwitchMode={() => { setMode(mode === "login" ? "register" : "login"); setMsg(""); }}
+        twoFactor={Boolean(twoFactorChallenge)}
+        onTwoFactor={submitTwoFactor}
+        onCancelTwoFactor={cancelTwoFactor}
       />
     );
   }
@@ -450,6 +561,12 @@ export default function Home() {
         return { title: `Hapus anggaran ${dialog.item.category.name}?`, description: "Batas bulanan ini akan dihapus." };
       case "confirm":
         return { title: dialog.title, description: dialog.description };
+      case "twofaSetup":
+        return { title: "Aktifkan autentikasi dua faktor", description: "Pindai kode QR, lalu masukkan kode 6 digit untuk mengonfirmasi." };
+      case "twofaDisable":
+        return { title: "Nonaktifkan 2FA?", description: "Semua perangkat akan dicabut dan kamu perlu masuk lagi." };
+      case "audit":
+        return { title: "Aktivitas keamanan", description: "Riwayat login, perubahan data, dan peristiwa keamanan terakhir." };
       case "reset":
         return { title: "Hapus semua data keuangan?", description: "Tindakan ini tidak bisa dibatalkan." };
     }
@@ -468,6 +585,80 @@ export default function Home() {
 
   function renderDialogBody() {
     if (!dialog) return null;
+
+    if (dialog.kind === "twofaSetup" && twoFactorSetup) {
+      return (
+        <form className="dialog-form" onSubmit={enableTwoFactor}>
+          <p className="modal-note">
+            Tambahkan akun <strong>Finwise</strong> di Google Authenticator, 1Password, Authy, atau aplikasi TOTP lain.
+            Masukkan kunci ini bila tidak bisa memindai tautan:
+          </p>
+          <code className="secret-code">{twoFactorSetup.secret}</code>
+          <a className="btn btn-quiet wide" href={twoFactorSetup.otpauthUri}>Buka di aplikasi authenticator</a>
+          <div className="reset-warning">
+            <Icon name="alert" />
+            <div>
+              <p><strong>Simpan kode pemulihan ini sekarang.</strong> Kode berikut hanya ditampilkan sekali.</p>
+              <div className="code-grid">
+                {twoFactorSetup.recoveryCodes.map((code) => <code key={code}>{code}</code>)}
+              </div>
+            </div>
+          </div>
+          <label className="field">Kode 6 digit dari aplikasi
+            <input name="code" inputMode="numeric" autoComplete="one-time-code" placeholder="123456" pattern="\d{6}" required />
+          </label>
+          <div className="dialog-actions">
+            <button className="btn btn-quiet" type="button" onClick={() => { setDialog(null); setTwoFactorSetup(null); }} disabled={busy}>Batal</button>
+            <button className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Mengaktifkan…" : "Aktifkan 2FA"}</button>
+          </div>
+        </form>
+      );
+    }
+
+    if (dialog.kind === "twofaDisable") {
+      return (
+        <form className="dialog-form" onSubmit={disableTwoFactor}>
+          <div className="reset-warning"><Icon name="alert" /><p>Setelah dinonaktifkan, semua sesi dicabut dan kode pemulihan yang tersisa dihapus.</p></div>
+          <label className="field">Password
+            <input name="password" type="password" autoComplete="current-password" required />
+          </label>
+          <label className="field">Kode 2FA atau kode pemulihan
+            <input name="code" autoComplete="one-time-code" required />
+          </label>
+          <div className="dialog-actions">
+            <button className="btn btn-quiet" type="button" onClick={() => setDialog(null)} disabled={busy}>Batal</button>
+            <button className="btn btn-danger" type="submit" disabled={busy}>{busy ? "Menonaktifkan…" : "Nonaktifkan 2FA"}</button>
+          </div>
+        </form>
+      );
+    }
+
+    if (dialog.kind === "audit") {
+      return (
+        <div className="dialog-form">
+          {audits.length === 0 ? (
+            <div className="empty-inline"><Icon name="shield" /><p>Belum ada aktivitas yang tercatat.</p></div>
+          ) : (
+            <div className="audit-list">
+              {audits.map((item) => (
+                <div className="audit-row" key={item.id}>
+                  <span className="audit-detail">
+                    <strong>{auditLabel(item.action)}</strong>
+                    <small>{fmtDateTime(item.createdAt)}{item.ip ? ` · ${item.ip}` : ""}</small>
+                  </span>
+                  {item.entity && <span className="tag">{item.entity}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {auditCursor && (
+            <button className="btn btn-quiet wide" type="button" onClick={() => void loadAudits(false, auditCursor)}>
+              Muat lebih banyak
+            </button>
+          )}
+        </div>
+      );
+    }
 
     if (dialog.kind === "reset") {
       return (
@@ -973,6 +1164,42 @@ export default function Home() {
                   <button className="btn btn-primary" type="submit">Simpan profil</button>
                 </form>
                 <p className="modal-note">Tanggal yang sudah tercatat tidak berubah saat zona waktu diganti.</p>
+              </section>
+
+              <section className="sheet" id="security">
+                <div className="sheet-head">
+                  <div><span className="sheet-kicker">Lapis keamanan</span><h2>Verifikasi dua faktor</h2></div>
+                  <span className={`tag ${security?.twoFactorEnabled ? "tag-good" : ""}`}>
+                    {security?.twoFactorEnabled ? "Aktif" : "Belum aktif"}
+                  </span>
+                </div>
+                <div className="danger-copy">
+                  <p>
+                    Setiap masuk harus memasukkan kode dari aplikasi authenticator. Simpan kode pemulihan di tempat aman
+                    supaya tetap bisa masuk kalau ponsel hilang.
+                  </p>
+                  <div className="security-actions">
+                    {security?.twoFactorEnabled ? (
+                      <>
+                        <span className="tag">{security.recoveryCodesRemaining} kode pemulihan tersisa</span>
+                        <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "twofaDisable" })}>
+                          Nonaktifkan 2FA
+                        </button>
+                      </>
+                    ) : (
+                      <button className="btn btn-small" type="button" onClick={() => void startTwoFactor()} disabled={busy}>
+                        {busy ? "Menyiapkan…" : "Aktifkan 2FA"}
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-small"
+                      type="button"
+                      onClick={() => { void loadAudits(true); setDialog({ kind: "audit" }); }}
+                    >
+                      Lihat aktivitas
+                    </button>
+                  </div>
+                </div>
               </section>
 
               <section className="sheet" id="sessions">

@@ -51,3 +51,23 @@ export const loginNoticeEmail = (link: string, device: string, ip: string) =>
     link,
     "Kelola perangkat",
   );
+
+/** Dikirim saat ada password salah untuk akun yang benar-benar ada. */
+export const loginFailedEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "Ada percobaan login gagal",
+    `Ada percobaan masuk dengan password yang salah dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Kalau itu kamu, tidak perlu melakukan apa pun. Kalau bukan kamu, cabut sesi asing dan ganti password sekarang.",
+    link,
+    "Periksa perangkat",
+  );
+
+/** Dikirim saat kode pemulihan 2FA dipakai. */
+export const recoveryUsedEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "Kode pemulihan Finwise dipakai",
+    `Seseorang baru saja masuk ke akunmu memakai <strong>kode pemulihan 2FA</strong> dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Kalau itu kamu, sebaiknya buat kode pemulihan baru. Kalau bukan kamu, cabut semua sesi dan ganti password.",
+    link,
+    "Periksa keamanan",
+  );

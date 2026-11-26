@@ -4,9 +4,9 @@ import { db } from "@/lib/db";
 import { getViewer } from "@/lib/auth";
 import { isValidTimeZone } from "@/lib/dates";
 import { CURRENCIES } from "@/lib/preferences";
-import { forbidden, isSameOrigin } from "@/lib/security";
 import { protectArcjet } from "@/lib/arcjet";
 import { audit } from "@/lib/audit";
+import { forbidden, isSameOrigin } from "@/lib/security";
 
 const schema = z.object({
   name: z.string().trim().min(2).max(60),
@@ -24,12 +24,22 @@ const unauthorized = () => NextResponse.json({ error: "Belum login" }, { status:
 export async function GET(req: NextRequest) {
   const viewer = await getViewer(req);
   if (!viewer) return unauthorized();
+
+  // Endpoint hanya membaca data milik viewer; CSRF tidak relevan untuk GET.
+  const [user, recoveryCodesRemaining] = await Promise.all([
+    db.user.findUnique({ where: { id: viewer.uid }, select: { twoFactorEnabled: true } }),
+    db.twoFactorRecovery.count({ where: { userId: viewer.uid, usedAt: null } }),
+  ]);
   return NextResponse.json({
     profile: {
       name: viewer.name,
       email: viewer.email,
       timezone: viewer.timezone,
       currency: viewer.currency,
+    },
+    security: {
+      twoFactorEnabled: user?.twoFactorEnabled ?? false,
+      recoveryCodesRemaining,
     },
   });
 }

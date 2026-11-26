@@ -8,9 +8,10 @@ import { authSchema } from "@/lib/schemas";
 import { clientIp, rateLimit } from "@/lib/security";
 import { hashToken, newToken } from "@/lib/tokens";
 import { protectArcjet } from "@/lib/arcjet";
-import { loginNoticeEmail, sendMail } from "@/lib/email";
+import { loginFailedEmail, loginNoticeEmail, sendMail } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { publicOrigin } from "@/lib/origin";
+import { signTwoFactorChallenge } from "@/lib/two-factor";
 
 const WRONG = { error: "Email atau password salah" };
 
@@ -18,43 +19,28 @@ const WRONG = { error: "Email atau password salah" };
 // saat email ditemukan -> tidak bisa dibedakan lewat timing.
 const DUMMY_HASH = bcrypt.hashSync("finwise-dummy-password-for-constant-time", 12);
 
-export async function handleLogin(req: NextRequest, issueToken: boolean) {
-  const guard = await protectArcjet(req, "login");
-  if (guard.denied) {
-    const headers = guard.retryAfter ? { "Retry-After": String(guard.retryAfter) } : undefined;
-    return NextResponse.json({ error: guard.error }, { status: guard.status, headers });
-  }
+type LoginUser = {
+  id: number;
+  name: string;
+  email: string;
+  tokenVersion: number;
+};
 
-  const parsed = authSchema.omit({ name: true }).safeParse(await req.json().catch(() => null));
-  if (!parsed.success) {
-    await bcrypt.compare("invalid-password", DUMMY_HASH);
-    return NextResponse.json(WRONG, { status: 401 });
-  }
+function notifyFailedLogin(email: string, req: NextRequest): void {
+  // Satu notifikasi per email per 15 menit untuk menghindari email bombing.
+  const hit = rateLimit(`login-fail-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
+  if (!hit.allowed) return;
 
-  const { email, password } = parsed.data;
-  const byEmail = rateLimit(`login-email:${email}`, 5, 15 * 60_000);
-  if (!byEmail.allowed) {
-    await bcrypt.compare(password, DUMMY_HASH);
-    const headers = { "Retry-After": String(byEmail.retryAfter) };
-    return NextResponse.json({ error: `Terlalu banyak percobaan untuk akun ini. Coba lagi ${byEmail.retryAfter} detik.` }, { status: 429, headers });
-  }
+  const link = `${publicOrigin()}/#sessions`;
+  void sendMail({
+    to: email,
+    subject: "Percobaan login gagal di Finwise",
+    html: loginFailedEmail(link, deviceLabel(req.headers.get("user-agent")), clientIp(req) ?? ""),
+  }).catch((error) => console.error("Gagal mengirim notifikasi login gagal:", error));
+}
 
-  const user = await db.user.findUnique({
-    where: { email },
-    select: { id: true, name: true, email: true, passwordHash: true, tokenVersion: true, emailVerified: true },
-  });
-  const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
-  if (!user || !valid) {
-    void audit({ action: "LOGIN_FAILED", req });
-    return NextResponse.json(WRONG, { status: 401 });
-  }
-  if (!user.emailVerified) {
-    void audit({ action: "LOGIN_UNVERIFIED", userId: user.id, entity: "User", entityId: user.id, req });
-    return NextResponse.json(
-      { error: "Email belum terverifikasi. Cek email kamu atau gunakan Kirim ulang verifikasi.", unverified: true },
-      { status: 403 },
-    );
-  }
+/** Dipanggil setelah password (dan 2FA, bila aktif) terverifikasi. */
+export async function completeLogin(req: NextRequest, user: LoginUser, issueToken: boolean) {
   void audit({ action: "LOGIN_SUCCESS", userId: user.id, entity: "User", entityId: user.id, req });
 
   const label = deviceLabel(req.headers.get("user-agent"));
@@ -102,4 +88,64 @@ export async function handleLogin(req: NextRequest, issueToken: boolean) {
     }).catch((error) => console.error("Gagal mengirim notifikasi login:", error));
   }
   return res;
+}
+
+export async function handleLogin(req: NextRequest, issueToken: boolean) {
+  const guard = await protectArcjet(req, "login");
+  if (guard.denied) {
+    const headers = guard.retryAfter ? { "Retry-After": String(guard.retryAfter) } : undefined;
+    return NextResponse.json({ error: guard.error }, { status: guard.status, headers });
+  }
+
+  const parsed = authSchema.omit({ name: true }).safeParse(await req.json().catch(() => null));
+  if (!parsed.success) {
+    await bcrypt.compare("invalid-password", DUMMY_HASH);
+    return NextResponse.json(WRONG, { status: 401 });
+  }
+
+  const { email, password } = parsed.data;
+  const byEmail = rateLimit(`login-email:${email}`, 5, 15 * 60_000);
+  if (!byEmail.allowed) {
+    await bcrypt.compare(password, DUMMY_HASH);
+    const headers = { "Retry-After": String(byEmail.retryAfter) };
+    return NextResponse.json({ error: `Terlalu banyak percobaan untuk akun ini. Coba lagi ${byEmail.retryAfter} detik.` }, { status: 429, headers });
+  }
+
+  const user = await db.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      passwordHash: true,
+      tokenVersion: true,
+      emailVerified: true,
+      twoFactorEnabled: true,
+    },
+  });
+  const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+  if (!user || !valid) {
+    void audit({ action: "LOGIN_FAILED", userId: user?.id ?? null, req });
+    if (user) notifyFailedLogin(user.email, req);
+    return NextResponse.json(WRONG, { status: 401 });
+  }
+  if (!user.emailVerified) {
+    void audit({ action: "LOGIN_UNVERIFIED", userId: user.id, entity: "User", entityId: user.id, req });
+    return NextResponse.json(
+      { error: "Email belum terverifikasi. Cek email kamu atau gunakan Kirim ulang verifikasi.", unverified: true },
+      { status: 403 },
+    );
+  }
+
+  if (user.twoFactorEnabled) {
+    void audit({ action: "LOGIN_2FA_REQUIRED", userId: user.id, entity: "User", entityId: user.id, req });
+    const challengeToken = await signTwoFactorChallenge({
+      uid: user.id,
+      tv: user.tokenVersion,
+      issueToken,
+    });
+    return NextResponse.json({ twoFactorRequired: true, challengeToken });
+  }
+
+  return completeLogin(req, user, issueToken);
 }

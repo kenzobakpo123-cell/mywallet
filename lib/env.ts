@@ -6,6 +6,8 @@ const schema = z.object({
   ARCJET_KEY: z.string().startsWith("ajkey_"),
   RESEND_API_KEY: z.string().startsWith("re_"),
   EMAIL_FROM: z.string().min(3),
+  // Daftar email yang boleh mendaftar, dipisah koma. Boleh berupa @domain.com.
+  ALLOWED_EMAILS: z.string().min(3, "ALLOWED_EMAILS wajib diisi"),
   APP_URL: z
     .string()
     .url()

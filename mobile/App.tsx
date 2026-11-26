@@ -185,6 +185,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<"login" | "register">("login");
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+  const [challenge, setChallenge] = useState("");
+  const [twoFactorCode, setTwoFactorCode] = useState("");
   const [form, setForm] = useState<Form>(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [items, setItems] = useState<Tx[]>([]);
@@ -274,6 +276,13 @@ export default function App() {
   const setAuth = (k: keyof typeof authForm) => (v: string) => setAuthForm({ ...authForm, [k]: v });
   const set = (k: keyof Form) => (v: string | number | null) => setForm((prev) => ({ ...prev, [k]: v }));
 
+  async function saveSession(tokenValue: string, refreshToken: string) {
+    await SecureStore.setItemAsync(TOKEN_KEY, tokenValue);
+    await SecureStore.setItemAsync(REFRESH_KEY, refreshToken);
+    setToken(tokenValue);
+    setAuthForm((prev) => ({ ...prev, password: "" }));
+  }
+
   async function auth() {
     const path = mode === "login" ? "/api/auth/mobile-login" : "/api/auth/register";
     const r = await call(path, "POST", { name: authForm.name, email: authForm.email, password: authForm.password });
@@ -282,9 +291,23 @@ export default function App() {
       setMode("login");
       return Alert.alert("Berhasil", r.d.message ?? r.d.warning ?? "Cek email untuk verifikasi sebelum masuk.");
     }
-    await SecureStore.setItemAsync(TOKEN_KEY, r.d.token);
-    await SecureStore.setItemAsync(REFRESH_KEY, r.d.refreshToken);
-    setToken(r.d.token);
+    if (r.d.twoFactorRequired && typeof r.d.challengeToken === "string") {
+      setTwoFactorCode("");
+      setChallenge(r.d.challengeToken);
+      return;
+    }
+    await saveSession(r.d.token, r.d.refreshToken);
+  }
+
+  async function verifyTwoFactor() {
+    if (!challenge || !twoFactorCode.trim()) return;
+    const r = await call("/api/auth/2fa/verify-login", "POST", {
+      challengeToken: challenge,
+      code: twoFactorCode.trim(),
+    });
+    if (!r.ok) return Alert.alert("Gagal", r.d.error ?? "Kode tidak cocok.");
+    setChallenge("");
+    await saveSession(r.d.token, r.d.refreshToken);
   }
 
   async function sendAuthEmail(kind: "forgot-password" | "resend-verification") {
@@ -409,6 +432,26 @@ export default function App() {
     );
 
   if (!ready) return <SafeAreaView style={styles.screen}><Text>Memuat…</Text></SafeAreaView>;
+
+  if (challenge && !token)
+    return (
+      <SafeAreaView style={styles.screen}>
+        <Text style={styles.title}>Verifikasi dua faktor</Text>
+        <Text style={styles.muted}>Masukkan kode 6 digit dari authenticator atau salah satu kode pemulihanmu.</Text>
+        <TextInput
+          placeholder="123456 atau ABCD12-EF34"
+          autoComplete="sms-otp"
+          autoCapitalize="characters"
+          value={twoFactorCode}
+          onChangeText={setTwoFactorCode}
+          style={styles.box}
+        />
+        <Button title="Verifikasi" onPress={verifyTwoFactor} />
+        <View style={{ marginTop: 10 }}>
+          <Button title="Kembali" onPress={() => { setChallenge(""); setTwoFactorCode(""); }} />
+        </View>
+      </SafeAreaView>
+    );
 
   if (!token)
     return (

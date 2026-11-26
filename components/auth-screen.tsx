@@ -6,9 +6,21 @@ type Props = {
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onAuthEmail: (kind: "forgot-password" | "resend-verification") => void;
   onSwitchMode: () => void;
+  twoFactor: boolean;
+  onTwoFactor: (e: FormEvent<HTMLFormElement>) => void;
+  onCancelTwoFactor: () => void;
 };
 
-export default function AuthScreen({ mode, msg, onSubmit, onAuthEmail, onSwitchMode }: Props) {
+export default function AuthScreen({
+  mode,
+  msg,
+  onSubmit,
+  onAuthEmail,
+  onSwitchMode,
+  twoFactor,
+  onTwoFactor,
+  onCancelTwoFactor,
+}: Props) {
   const isLogin = mode === "login";
   const positive = /berhasil|dibuat|terkirim|diproses|aktif/i.test(msg);
 
@@ -31,40 +43,68 @@ export default function AuthScreen({ mode, msg, onSubmit, onAuthEmail, onSwitchM
 
       <section className="auth-panel">
         <div className="auth-card">
-          <span className="auth-kicker">{isLogin ? "Selamat datang kembali" : "Mulai dari sini"}</span>
-          <h2>{isLogin ? "Masuk ke akun" : "Buat akun baru"}</h2>
-          <p className="auth-description">
-            {isLogin ? "Isi detail akun kamu untuk melanjutkan." : "Daftar dulu, lalu verifikasi lewat email."}
-          </p>
+          {twoFactor ? (
+            <>
+              <span className="auth-kicker">Lapis keamanan tambahan</span>
+              <h2>Verifikasi dua faktor</h2>
+              <p className="auth-description">
+                Masukkan kode 6 digit dari aplikasi authenticator, atau salah satu kode pemulihanmu.
+              </p>
+              <form className="auth-form" onSubmit={onTwoFactor}>
+                <label>Kode verifikasi
+                  <input
+                    name="code"
+                    inputMode="text"
+                    autoComplete="one-time-code"
+                    placeholder="123456 atau ABCD12-EF34"
+                    required
+                  />
+                </label>
+                {msg && <p className={positive ? "success" : "err"}>{msg}</p>}
+                <button className="primary-button" type="submit">Verifikasi</button>
+              </form>
+              <p className="auth-switch">
+                <button type="button" className="text-button" onClick={onCancelTwoFactor}>Kembali ke masuk</button>
+              </p>
+            </>
+          ) : (
+            <>
+              <span className="auth-kicker">{isLogin ? "Selamat datang kembali" : "Mulai dari sini"}</span>
+              <h2>{isLogin ? "Masuk ke akun" : "Buat akun baru"}</h2>
+              <p className="auth-description">
+                {isLogin ? "Isi detail akun kamu untuk melanjutkan." : "Daftar dulu, lalu verifikasi lewat email."}
+              </p>
 
-          <form className="auth-form" onSubmit={onSubmit}>
-            {!isLogin && (
-              <label>Nama lengkap
-                <input name="name" placeholder="Nama kamu" required minLength={2} maxLength={60} />
-              </label>
-            )}
-            <label>Email
-              <input name="email" type="email" placeholder="nama@email.com" required />
-            </label>
-            <label>Password
-              <input name="password" type="password" placeholder="Minimal 8 karakter" minLength={8} required />
-            </label>
-            {isLogin && (
-              <div className="auth-links">
-                <button type="button" className="text-button" onClick={() => onAuthEmail("forgot-password")}>Lupa password?</button>
-                <button type="button" className="text-button" onClick={() => onAuthEmail("resend-verification")}>Kirim ulang verifikasi</button>
-              </div>
-            )}
-            {msg && <p className={positive ? "success" : "err"}>{msg}</p>}
-            <button className="primary-button" type="submit">{isLogin ? "Masuk" : "Buat akun"}</button>
-          </form>
+              <form className="auth-form" onSubmit={onSubmit}>
+                {!isLogin && (
+                  <label>Nama lengkap
+                    <input name="name" placeholder="Nama kamu" required minLength={2} maxLength={60} />
+                  </label>
+                )}
+                <label>Email
+                  <input name="email" type="email" placeholder="nama@email.com" required />
+                </label>
+                <label>Password
+                  <input name="password" type="password" placeholder="Minimal 8 karakter" minLength={8} required />
+                </label>
+                {isLogin && (
+                  <div className="auth-links">
+                    <button type="button" className="text-button" onClick={() => onAuthEmail("forgot-password")}>Lupa password?</button>
+                    <button type="button" className="text-button" onClick={() => onAuthEmail("resend-verification")}>Kirim ulang verifikasi</button>
+                  </div>
+                )}
+                {msg && <p className={positive ? "success" : "err"}>{msg}</p>}
+                <button className="primary-button" type="submit">{isLogin ? "Masuk" : "Buat akun"}</button>
+              </form>
 
-          <p className="auth-switch">
-            {isLogin ? "Belum punya akun?" : "Sudah punya akun?"}{" "}
-            <button type="button" className="text-button" onClick={onSwitchMode}>
-              {isLogin ? "Daftar sekarang" : "Masuk"}
-            </button>
-          </p>
+              <p className="auth-switch">
+                {isLogin ? "Belum punya akun?" : "Sudah punya akun?"}{" "}
+                <button type="button" className="text-button" onClick={onSwitchMode}>
+                  {isLogin ? "Daftar sekarang" : "Masuk"}
+                </button>
+              </p>
+            </>
+          )}
         </div>
       </section>
     </main>

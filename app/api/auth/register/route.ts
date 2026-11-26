@@ -9,6 +9,7 @@ import { sendMail, verificationEmail } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { publicOrigin } from "@/lib/origin";
 import { forbidden, isSameOrigin } from "@/lib/security";
+import { isEmailAllowed } from "@/lib/allowlist";
 
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return forbidden();
@@ -16,6 +17,10 @@ export async function POST(req: NextRequest) {
   const p = authSchema.safeParse(await req.json().catch(() => null));
   if (!p.success || !p.data.name) {
     return NextResponse.json({ error: "Nama, email, dan password (min. 8 karakter, maks. 72 byte) wajib diisi" }, { status: 400 });
+  }
+
+  if (!isEmailAllowed(p.data.email)) {
+    return NextResponse.json({ error: "Pendaftaran hanya untuk email yang diizinkan pemilik aplikasi." }, { status: 403 });
   }
 
   const guard = await protectArcjet(req, "register", p.data.email);

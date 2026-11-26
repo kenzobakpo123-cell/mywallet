@@ -23,14 +23,32 @@ model User {
   emailVerified        DateTime?
   verificationToken    String?       @unique
   verificationExpires  DateTime?
-  passwordResetToken   String?       @unique
-  passwordResetExpires DateTime?
-  createdAt            DateTime      @default(now())
-  transactions         Transaction[]
-  wallets              Wallet[]
-  categories           Category[]
-  budgets              Budget[]
-  sessions             Session[]
+  passwordResetToken    String?       @unique
+  passwordResetExpires  DateTime?
+  // Rahasia TOTP dan rahasia proses pendaftaran disimpan terenkripsi (AES-GCM).
+  twoFactorEnabled      Boolean       @default(false)
+  twoFactorSecret       String?       @db.VarChar(512)
+  twoFactorPendingSecret String?      @db.VarChar(512)
+  createdAt             DateTime      @default(now())
+  transactions          Transaction[]
+  wallets               Wallet[]
+  categories            Category[]
+  budgets               Budget[]
+  sessions              Session[]
+  twoFactorRecoveries   TwoFactorRecovery[]
+}
+
+/** Kode pemulihan 2FA disimpan sebagai hash SHA-256 dan hanya bisa dipakai sekali. */
+model TwoFactorRecovery {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  codeHash  String    @db.VarChar(64)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+  @@index([userId, usedAt])
 }
 
 model Session {
