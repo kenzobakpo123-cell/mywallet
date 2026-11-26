@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { dateKeyInZone, localDateInputValue } from "@/lib/dates";
 import { CURRENCIES, TIMEZONES, displayDate, formatMoney } from "@/lib/preferences";
 import { api } from "@/components/client-api";
 import AuthScreen from "@/components/auth-screen";
+import Icon, { type IconName } from "@/components/icons";
+import Modal from "@/components/modal";
 import {
   EMPTY_FILTERS,
   EMPTY_SUM,
@@ -18,14 +20,28 @@ import {
   type Wallet,
 } from "@/components/finance-types";
 
-type Section = "summary" | "transactions" | "profile" | "sessions";
+type Section = "overview" | "transactions" | "manage" | "settings";
+type Dialog =
+  | { kind: "wallet"; item?: Wallet }
+  | { kind: "category"; item?: Category }
+  | { kind: "budget"; item?: Budget }
+  | { kind: "tx"; item?: Tx }
+  | { kind: "deleteTx"; item: Tx }
+  | { kind: "deleteWallet"; item: Wallet }
+  | { kind: "deleteCategory"; item: Category }
+  | { kind: "deleteBudget"; item: Budget }
+  | { kind: "confirm"; title: string; description: string; action: "revoke-session" | "revoke-others"; item?: SessionInfo }
+  | { kind: "reset" }
+  | null;
 
-const NAV: { key: Section; label: string; icon: string; target: string }[] = [
-  { key: "summary", label: "Ringkasan", icon: "⌂", target: "summary" },
-  { key: "transactions", label: "Transaksi", icon: "↕", target: "transaction-history" },
-  { key: "profile", label: "Profil", icon: "⚙", target: "profile" },
-  { key: "sessions", label: "Perangkat", icon: "▦", target: "sessions" },
+const NAV: { key: Section; label: string; icon: IconName }[] = [
+  { key: "overview", label: "Ringkasan", icon: "home" },
+  { key: "transactions", label: "Transaksi", icon: "list" },
+  { key: "manage", label: "Pengelolaan", icon: "layers" },
+  { key: "settings", label: "Pengaturan", icon: "settings" },
 ];
+
+const GOOD_NEWS = /berhasil|dibuat|terkirim|diproses|aktif|tersimpan|dicabut|dihapus/i;
 
 function queryFor(month: string, filters: Filters, offset?: number) {
   const params = new URLSearchParams();
@@ -41,6 +57,15 @@ function queryFor(month: string, filters: Filters, offset?: number) {
   return params.toString();
 }
 
+function exportQuery(filters: Filters) {
+  const params = new URLSearchParams();
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.q) params.set("q", filters.q);
+  if (filters.category) params.set("category", filters.category);
+  return params.toString();
+}
+
 export default function Home() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -49,7 +74,7 @@ export default function Home() {
   const [wallets, setWallets] = useState<Wallet[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [activeSection, setActiveSection] = useState<Section>("summary");
+  const [activeSection, setActiveSection] = useState<Section>("overview");
   const [msg, setMsg] = useState("");
   const [loadError, setLoadError] = useState("");
   const [txTotal, setTxTotal] = useState(0);
@@ -60,10 +85,20 @@ export default function Home() {
   const [profileForm, setProfileForm] = useState({ name: "", timezone: "UTC", currency: "IDR" });
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [month, setMonth] = useState(() => localDateInputValue().slice(0, 7));
+  const [txType, setTxType] = useState<"EXPENSE" | "INCOME">("EXPENSE");
+  const [dialog, setDialog] = useState<Dialog>(null);
+  const [resetPhrase, setResetPhrase] = useState("");
+  const [busy, setBusy] = useState(false);
   const prefInitialized = useRef(false);
 
   const rp = (n: number) => formatMoney(n, profile?.currency ?? "IDR");
   const todayInput = profile ? dateKeyInZone(new Date(), profile.timezone) : localDateInputValue();
+
+  useEffect(() => {
+    if (!msg) return;
+    const timer = window.setTimeout(() => setMsg(""), 6500);
+    return () => window.clearTimeout(timer);
+  }, [msg]);
 
   const load = useCallback(async () => {
     const [tx, summary, walletRes, categoryRes, budgetRes] = await Promise.all([
@@ -145,7 +180,12 @@ export default function Home() {
     void load();
   }
 
-  async function submitAuth(e: React.FormEvent<HTMLFormElement>) {
+  function openSection(key: Section) {
+    setActiveSection(key);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function submitAuth(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const body = Object.fromEntries(new FormData(e.currentTarget));
     const r = await api(`/api/auth/${mode}`, "POST", body);
@@ -174,47 +214,19 @@ export default function Home() {
     refresh();
   }
 
-  function addTx(e: React.FormEvent<HTMLFormElement>) {
+  function addTx(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
     const f = new FormData(form);
     const walletValue = f.get("walletId");
     void submitForm("/api/transactions", {
-      type: f.get("type"),
+      type: txType,
       amount: Number(f.get("amount")),
       category: f.get("category"),
       note: f.get("note") || undefined,
       date: f.get("date"),
       ...(walletValue ? { walletId: Number(walletValue) } : {}),
     }, form, "Gagal menyimpan transaksi");
-  }
-
-  function addWallet(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const f = new FormData(form);
-    void submitForm("/api/wallets", { name: f.get("name"), initialBalance: Number(f.get("initialBalance") || 0) }, form, "Gagal menyimpan dompet");
-  }
-
-  function addCategory(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const f = new FormData(form);
-    void submitForm("/api/categories", { name: f.get("name"), type: f.get("type") }, form, "Gagal menyimpan kategori");
-  }
-
-  function addBudget(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const form = e.currentTarget;
-    const f = new FormData(form);
-    void submitForm("/api/budgets", { categoryId: Number(f.get("categoryId")), month, limit: Number(f.get("limit")) }, form, "Gagal menyimpan anggaran");
-  }
-
-  async function remove(id: number) {
-    if (!window.confirm("Hapus transaksi ini?")) return;
-    const r = await api(`/api/transactions/${id}`, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal menghapus transaksi");
-    refresh();
   }
 
   function readAmount(label: string, value: string): number | null {
@@ -226,63 +238,7 @@ export default function Home() {
     return amount;
   }
 
-  async function patchAndRefresh(url: string, body: unknown, errorText: string) {
-    const r = await api(url, "PATCH", body);
-    if (!r.ok) return setMsg(r.d.error ?? errorText);
-    setMsg("");
-    refresh();
-  }
-
-  async function deleteAndRefresh(url: string, confirmText: string, errorText: string) {
-    if (!window.confirm(confirmText)) return;
-    const r = await api(url, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? errorText);
-    setMsg("");
-    refresh();
-  }
-
-  function editWallet(wallet: Wallet) {
-    const name = window.prompt("Nama dompet", wallet.name);
-    if (name === null) return;
-    const raw = window.prompt("Saldo awal", String(wallet.initialBalance));
-    if (raw === null) return;
-    const initialBalance = readAmount("Saldo awal", raw);
-    if (initialBalance !== null) void patchAndRefresh(`/api/wallets/${wallet.id}`, { name: name.trim(), initialBalance }, "Gagal memperbarui dompet");
-  }
-
-  function removeWallet(wallet: Wallet) {
-    void deleteAndRefresh(`/api/wallets/${wallet.id}`, `Hapus dompet "${wallet.name}"? Transaksinya tidak ikut terhapus.`, "Gagal menghapus dompet");
-  }
-
-  function editCategory(category: Category) {
-    const name = window.prompt("Nama kategori", category.name);
-    if (name === null) return;
-    const rawType = window.prompt('Tipe (masuk / keluar)', category.type === "INCOME" ? "masuk" : "keluar");
-    if (rawType === null) return;
-    const normalized = rawType.trim().toLowerCase();
-    const type = normalized.startsWith("m") ? "INCOME" : normalized.startsWith("k") ? "EXPENSE" : null;
-    if (!type) return setMsg('Tipe harus "masuk" atau "keluar".');
-    void patchAndRefresh(`/api/categories/${category.id}`, { name: name.trim(), type }, "Gagal memperbarui kategori");
-  }
-
-  function removeCategory(category: Category) {
-    void deleteAndRefresh(`/api/categories/${category.id}`, `Hapus kategori "${category.name}"? Anggarannya juga hilang.`, "Gagal menghapus kategori");
-  }
-
-  function editBudget(budget: Budget) {
-    const raw = window.prompt(`Batas anggaran ${budget.category.name}`, String(budget.limit));
-    if (raw === null) return;
-    const limit = readAmount("Batas anggaran", raw);
-    if (limit === null) return;
-    if (limit === 0) return setMsg("Batas anggaran harus lebih dari 0.");
-    void patchAndRefresh(`/api/budgets/${budget.id}`, { limit }, "Gagal memperbarui anggaran");
-  }
-
-  function removeBudget(budget: Budget) {
-    void deleteAndRefresh(`/api/budgets/${budget.id}`, `Hapus anggaran ${budget.category.name}?`, "Gagal menghapus anggaran");
-  }
-
-  function applyFilters(e: React.FormEvent<HTMLFormElement>) {
+  function applyFilters(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setAppliedFilters({ q: filters.q.trim(), category: filters.category, from: filters.from, to: filters.to });
     setTxOffset(0);
@@ -301,7 +257,7 @@ export default function Home() {
     setTxOffset(offset);
   }
 
-  async function saveProfile(e: React.FormEvent<HTMLFormElement>) {
+  async function saveProfile(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const r = await api<{ profile: Profile }>("/api/profile", "PATCH", profileForm);
     if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan profil");
@@ -310,23 +266,6 @@ export default function Home() {
     setMonth(dateKeyInZone(new Date(), p.timezone).slice(0, 7));
     setMsg("Profil berhasil disimpan.");
     refresh();
-  }
-
-  async function revokeSession(item: SessionInfo) {
-    if (!window.confirm(`Cabut akses perangkat "${item.label}"?`)) return;
-    const r = await api<{ current?: boolean }>(`/api/sessions/${item.id}`, "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal mencabut sesi");
-    setSessions((prev) => prev.filter((s) => s.id !== item.id));
-    setMsg(r.d.current ? "Sesi perangkat ini dicabut." : "Perangkat berhasil dicabut.");
-    if (r.d.current) void logout();
-  }
-
-  async function revokeOtherSessions() {
-    if (!window.confirm("Cabut semua perangkat lain?")) return;
-    const r = await api<{ revoked?: number }>("/api/sessions", "DELETE");
-    if (!r.ok) return setMsg(r.d.error ?? "Gagal mencabut sesi");
-    void loadSessions();
-    setMsg(`${r.d.revoked ?? 0} perangkat lain berhasil dicabut.`);
   }
 
   async function logout(all = false) {
@@ -345,12 +284,129 @@ export default function Home() {
     setTxOffset(0);
     setFilters(EMPTY_FILTERS);
     setAppliedFilters(EMPTY_FILTERS);
+    setActiveSection("overview");
+    setTxType("EXPENSE");
+    setDialog(null);
     setMsg("");
     setLoadError("");
   }
 
+  async function submitDialog(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!dialog || busy) return;
+    const f = new FormData(e.currentTarget);
+    setBusy(true);
+
+    let url = "";
+    let method = "POST";
+    let body: unknown;
+    let okText = "Perubahan tersimpan.";
+
+    if (dialog.kind === "wallet") {
+      const initialBalance = readAmount("Saldo awal", String(f.get("initialBalance") ?? 0));
+      if (initialBalance === null) return setBusy(false);
+      url = dialog.item ? `/api/wallets/${dialog.item.id}` : "/api/wallets";
+      method = dialog.item ? "PATCH" : "POST";
+      body = { name: String(f.get("name") ?? "").trim(), initialBalance };
+      okText = dialog.item ? "Dompet diperbarui." : "Dompet ditambahkan.";
+    } else if (dialog.kind === "category") {
+      url = dialog.item ? `/api/categories/${dialog.item.id}` : "/api/categories";
+      method = dialog.item ? "PATCH" : "POST";
+      body = { name: String(f.get("name") ?? "").trim(), type: f.get("type") };
+      okText = dialog.item ? "Kategori diperbarui." : "Kategori ditambahkan.";
+    } else if (dialog.kind === "budget") {
+      const limit = readAmount("Batas anggaran", String(f.get("limit") ?? 0));
+      if (limit === null) return setBusy(false);
+      if (limit === 0) {
+        setBusy(false);
+        return setMsg("Batas anggaran harus lebih dari 0.");
+      }
+      url = dialog.item ? `/api/budgets/${dialog.item.id}` : "/api/budgets";
+      method = dialog.item ? "PATCH" : "POST";
+      body = { categoryId: Number(f.get("categoryId")), month, limit };
+      okText = dialog.item ? "Anggaran diperbarui." : "Anggaran diatur.";
+    } else if (dialog.kind === "tx") {
+      const amount = readAmount("Jumlah", String(f.get("amount") ?? 0));
+      if (amount === null) return setBusy(false);
+      if (amount === 0) {
+        setBusy(false);
+        return setMsg("Jumlah transaksi harus lebih dari 0.");
+      }
+      const walletValue = f.get("walletId");
+      url = dialog.item ? `/api/transactions/${dialog.item.id}` : "/api/transactions";
+      method = dialog.item ? "PATCH" : "POST";
+      body = {
+        type: f.get("type"),
+        amount,
+        category: String(f.get("category") ?? "").trim(),
+        note: f.get("note") || undefined,
+        date: f.get("date"),
+        ...(walletValue ? { walletId: Number(walletValue) } : {}),
+      };
+      okText = dialog.item ? "Transaksi diperbarui." : "Transaksi tersimpan.";
+    } else if (dialog.kind === "deleteTx") {
+      url = `/api/transactions/${dialog.item.id}`;
+      method = "DELETE";
+      okText = "Transaksi dihapus.";
+    } else if (dialog.kind === "deleteWallet") {
+      url = `/api/wallets/${dialog.item.id}`;
+      method = "DELETE";
+      okText = "Dompet dihapus.";
+    } else if (dialog.kind === "deleteCategory") {
+      url = `/api/categories/${dialog.item.id}`;
+      method = "DELETE";
+      okText = "Kategori dihapus.";
+    } else if (dialog.kind === "deleteBudget") {
+      url = `/api/budgets/${dialog.item.id}`;
+      method = "DELETE";
+      okText = "Anggaran dihapus.";
+    } else if (dialog.kind === "confirm") {
+      if (dialog.action === "revoke-session" && dialog.item) {
+        url = `/api/sessions/${dialog.item.id}`;
+        method = "DELETE";
+        okText = "Perangkat dicabut.";
+      } else {
+        url = "/api/sessions";
+        method = "DELETE";
+        okText = "Perangkat lain dicabut.";
+      }
+    }
+
+    const r = await api(url, method, body);
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal menyimpan perubahan.");
+
+    if (dialog.kind === "confirm" && dialog.action === "revoke-session" && dialog.item) {
+      setSessions((prev) => prev.filter((item) => item.id !== dialog.item?.id));
+      if (r.d.current) {
+        void logout();
+        return;
+      }
+      void loadSessions();
+    }
+    if (dialog.kind === "confirm" && dialog.action === "revoke-others") void loadSessions();
+
+    setDialog(null);
+    setMsg(okText);
+    refresh();
+  }
+
+  async function resetData() {
+    if (resetPhrase !== "RESET" || busy) return;
+    setBusy(true);
+    const r = await api("/api/data/reset", "POST", { confirm: "RESET" });
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal menghapus data.");
+    setDialog(null);
+    await logout();
+    setMsg("Data keuangan dihapus. Akun kamu tetap tersedia.");
+  }
+
   const monthLabel = new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(`${month}-01T00:00:00Z`));
+  const quickCategories = categories.filter((category) => category.type === txType);
+  const budgetCategories = categories.filter((category) => category.type === "EXPENSE");
+  const exportSuffix = exportQuery(appliedFilters);
 
   if (authed === null) {
     return (
@@ -373,6 +429,171 @@ export default function Home() {
     );
   }
 
+  const dialogMeta = (() => {
+    if (!dialog) return null;
+    switch (dialog.kind) {
+      case "wallet":
+        return { title: dialog.item ? "Ubah dompet" : "Dompet baru", description: "Simpan saldo awal supaya saldo bulan ini lebih akurat." };
+      case "category":
+        return { title: dialog.item ? "Ubah kategori" : "Kategori baru", description: "Kategori memudahkan pencarian dan anggaran." };
+      case "budget":
+        return { title: dialog.item ? "Ubah anggaran" : "Anggaran baru", description: `Berlaku untuk ${monthLabel}.` };
+      case "tx":
+        return { title: dialog.item ? "Ubah transaksi" : "Transaksi baru", description: "Semua kolom mengikuti apa yang kamu tulis." };
+      case "deleteTx":
+        return { title: "Hapus transaksi?", description: `${dialog.item.category} · ${rp(dialog.item.amount)}` };
+      case "deleteWallet":
+        return { title: `Hapus dompet "${dialog.item.name}"?`, description: "Transaksi yang memakai dompet ini tetap tersimpan tanpa dompet." };
+      case "deleteCategory":
+        return { title: `Hapus kategori "${dialog.item.name}"?`, description: "Anggaran kategori ini ikut terhapus. Transaksi lama tetap tersimpan." };
+      case "deleteBudget":
+        return { title: `Hapus anggaran ${dialog.item.category.name}?`, description: "Batas bulanan ini akan dihapus." };
+      case "confirm":
+        return { title: dialog.title, description: dialog.description };
+      case "reset":
+        return { title: "Hapus semua data keuangan?", description: "Tindakan ini tidak bisa dibatalkan." };
+    }
+  })();
+
+  function walletOptions() {
+    return (
+      <>
+        <option value="">Tanpa dompet</option>
+        {wallets.map((wallet) => (
+          <option key={wallet.id} value={wallet.id}>{wallet.name}</option>
+        ))}
+      </>
+    );
+  }
+
+  function renderDialogBody() {
+    if (!dialog) return null;
+
+    if (dialog.kind === "reset") {
+      return (
+        <form className="dialog-form" onSubmit={(e) => { e.preventDefault(); void resetData(); }}>
+          <div className="reset-warning">
+            <Icon name="alert" />
+            <p>
+              Transaksi, dompet, kategori, anggaran, dan sesi login akan dihapus. Nama, email, dan password kamu tetap disimpan.
+            </p>
+          </div>
+          <label className="field">
+            Ketik <strong>RESET</strong> untuk melanjutkan
+            <input
+              value={resetPhrase}
+              onChange={(e) => setResetPhrase(e.target.value)}
+              placeholder="RESET"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <div className="dialog-actions">
+            <button className="btn btn-quiet" type="button" onClick={() => setDialog(null)} disabled={busy}>Batal</button>
+            <button className="btn btn-danger" type="submit" disabled={busy || resetPhrase !== "RESET"}>
+              {busy ? "Menghapus…" : "Ya, hapus semua data"}
+            </button>
+          </div>
+        </form>
+      );
+    }
+
+    return (
+      <form className="dialog-form" onSubmit={submitDialog}>
+        {dialog.kind === "wallet" && (
+          <>
+            <label className="field">Nama dompet
+              <input name="name" defaultValue={dialog.item?.name} placeholder="Contoh: Dompet harian" required />
+            </label>
+            <label className="field">Saldo awal ({profile?.currency ?? "IDR"})
+              <input name="initialBalance" type="number" min={0} step={1} defaultValue={dialog.item?.initialBalance ?? 0} required />
+            </label>
+          </>
+        )}
+
+        {dialog.kind === "category" && (
+          <>
+            <label className="field">Nama kategori
+              <input name="name" defaultValue={dialog.item?.name} placeholder="Contoh: Transportasi" required />
+            </label>
+            <label className="field">Jenis
+              <select name="type" defaultValue={dialog.item?.type ?? "EXPENSE"}>
+                <option value="EXPENSE">Pengeluaran</option>
+                <option value="INCOME">Pemasukan</option>
+              </select>
+            </label>
+          </>
+        )}
+
+        {dialog.kind === "budget" && (
+          <>
+            <label className="field">Kategori pengeluaran
+              <select name="categoryId" defaultValue={dialog.item?.categoryId} required>
+                <option value="">Pilih kategori</option>
+                {budgetCategories.map((category) => (
+                  <option key={category.id} value={category.id}>{category.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="field">Batas ({profile?.currency ?? "IDR"})
+              <input name="limit" type="number" min={1} step={1} defaultValue={dialog.item?.limit} placeholder="0" required />
+            </label>
+            {budgetCategories.length === 0 && <p className="modal-note">Buat kategori pengeluaran dulu sebelum mengatur anggaran.</p>}
+          </>
+        )}
+
+        {dialog.kind === "tx" && (
+          <>
+            <label className="field">Jenis
+              <select name="type" defaultValue={dialog.item?.type ?? "EXPENSE"}>
+                <option value="EXPENSE">Pengeluaran</option>
+                <option value="INCOME">Pemasukan</option>
+              </select>
+            </label>
+            <div className="field-grid">
+              <label className="field">Jumlah ({profile?.currency ?? "IDR"})
+                <input name="amount" type="number" min={1} step={1} defaultValue={dialog.item?.amount} required />
+              </label>
+              <label className="field">Tanggal
+                <input name="date" type="date" defaultValue={dialog.item?.dateKey ?? dialog.item?.date.slice(0, 10) ?? todayInput} required />
+              </label>
+            </div>
+            <label className="field">Kategori
+              <input name="category" defaultValue={dialog.item?.category} placeholder="Sesuai tulisan kamu" required />
+            </label>
+            <label className="field">Dompet
+              <select name="walletId" defaultValue={dialog.item?.walletId ?? ""}>{walletOptions()}</select>
+            </label>
+            <label className="field">Catatan
+              <input name="note" defaultValue={dialog.item?.note ?? ""} placeholder="Opsional" />
+            </label>
+          </>
+        )}
+
+        {(dialog.kind === "deleteTx" || dialog.kind === "deleteWallet" || dialog.kind === "deleteCategory" || dialog.kind === "deleteBudget" || dialog.kind === "confirm") && (
+          <p className="modal-note">
+            {dialog.kind === "deleteTx"
+              ? "Transaksi ini akan hilang dari buku kas dan ekspor."
+              : "description" in dialog
+                ? dialog.description
+                : ""}
+          </p>
+        )}
+
+        <div className="dialog-actions">
+          <button className="btn btn-quiet" type="button" onClick={() => setDialog(null)} disabled={busy}>Batal</button>
+          <button
+            className={`btn ${dialog.kind === "deleteTx" || dialog.kind === "deleteWallet" || dialog.kind === "deleteCategory" || dialog.kind === "deleteBudget" || dialog.kind === "confirm" ? "btn-danger" : "btn-primary"}`}
+            type="submit"
+            disabled={busy}
+          >
+            {busy ? "Memproses…" : dialog.kind === "deleteTx" || dialog.kind === "deleteWallet" || dialog.kind === "deleteCategory" || dialog.kind === "deleteBudget" || dialog.kind === "confirm" ? "Ya, lanjutkan" : "Simpan"}
+          </button>
+        </div>
+      </form>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -384,289 +605,443 @@ export default function Home() {
               className={`nav-item ${activeSection === item.key ? "active" : ""}`}
               type="button"
               aria-current={activeSection === item.key ? "page" : undefined}
-              onClick={() => {
-                setActiveSection(item.key);
-                document.getElementById(item.target)?.scrollIntoView({ behavior: "smooth" });
-              }}
+              onClick={() => openSection(item.key)}
             >
-              <span className="nav-icon">{item.icon}</span><span>{item.label}</span>
+              <Icon name={item.icon} />
+              <span>{item.label}</span>
             </button>
           ))}
         </nav>
-        <button className="logout-button" type="button" onClick={() => logout()}>
-          <span>↪</span> Keluar
-        </button>
+        <div className="sidebar-foot">
+          <div className="user-chip">
+            <span className="user-avatar">{(profile?.name ?? "K").slice(0, 1).toUpperCase()}</span>
+            <span className="user-detail"><strong>{profile?.name ?? "Kamu"}</strong><small>{profile?.email ?? ""}</small></span>
+          </div>
+          <button className="logout-button" type="button" onClick={() => void logout()}>
+            <Icon name="logout" size={16} /> Keluar
+          </button>
+        </div>
       </aside>
 
       <section className="dashboard">
-        <header className="dashboard-header" id="summary">
-          <div>
+        <header className="dashboard-header">
+          <div className="header-copy">
             <p className="header-kicker">Buku kas · {monthLabel}</p>
             <h1>Halo, {profile?.name ?? "kamu"}.</h1>
+            <p className="header-sub">Catat dulu, pikirkan nanti. Semua tersimpan rapi di sini.</p>
           </div>
           <div className="header-actions">
-            <div className="month-pill">{monthLabel}</div>
-            <a className="export-button" href={`/api/transactions/export?month=${month}`}>↓ Ekspor CSV</a>
+            <label className="month-field" title="Bulan yang sedang dilihat">
+              <Icon name="calendar" size={16} />
+              <input aria-label="Pilih bulan" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </label>
+            <div className="export-group">
+              <a className="btn btn-quiet" href={`/api/transactions/export?format=csv${exportSuffix ? `&${exportSuffix}` : ""}`}>
+                <Icon name="download" size={16} /> CSV
+              </a>
+              <a className="btn btn-quiet" href={`/api/transactions/export?format=pdf${exportSuffix ? `&${exportSuffix}` : ""}`}>
+                <Icon name="file" size={16} /> PDF
+              </a>
+            </div>
           </div>
         </header>
 
-        {msg && <p className={/berhasil|dibuat|terkirim|diproses|aktif/i.test(msg) ? "success" : "err"}>{msg}</p>}
-        {loadError && <p className="err">{loadError}</p>}
+        {msg && (
+          <div className={`toast ${GOOD_NEWS.test(msg) ? "ok" : "err"}`} role="status">
+            <Icon name={GOOD_NEWS.test(msg) ? "check" : "alert"} size={16} /> {msg}
+          </div>
+        )}
+        {!msg && loadError && (
+          <div className="toast err" role="status"><Icon name="alert" size={16} /> {loadError}</div>
+        )}
 
-        <div className="summary-grid">
-          <article className="summary-card balance-card">
-            <div className="summary-icon">◈</div>
-            <div><span>Saldo saat ini</span><strong>{rp(sum?.balance ?? 0)}</strong></div>
-          </article>
-          <article className="summary-card">
-            <div className="summary-icon income-icon">↙</div>
-            <div><span>Pemasukan</span><strong className="income-text">{rp(sum?.income ?? 0)}</strong></div>
-          </article>
-          <article className="summary-card">
-            <div className="summary-icon expense-icon">↗</div>
-            <div><span>Pengeluaran</span><strong className="expense-text">{rp(sum?.expense ?? 0)}</strong></div>
-          </article>
-        </div>
-
-        <div className="content-grid">
-          <section className="panel transaction-panel">
-            <div className="panel-heading">
-              <div><p className="panel-kicker">Catatan baru</p><h2>Tambah transaksi</h2></div>
+        {activeSection === "overview" && (
+          <>
+            <div className="summary-grid">
+              <article className="summary-card balance-card">
+                <div className="summary-icon"><Icon name="wallet" /></div>
+                <div><span>Saldo saat ini</span><strong>{rp(sum?.balance ?? 0)}</strong></div>
+                <small>termin bulan ini</small>
+              </article>
+              <article className="summary-card">
+                <div className="summary-icon income-icon"><Icon name="income" /></div>
+                <div><span>Pemasukan bulan ini</span><strong className="income-text">{rp(sum?.income ?? 0)}</strong></div>
+              </article>
+              <article className="summary-card">
+                <div className="summary-icon expense-icon"><Icon name="expense" /></div>
+                <div><span>Pengeluaran bulan ini</span><strong className="expense-text">{rp(sum?.expense ?? 0)}</strong></div>
+              </article>
             </div>
-            <form className="transaction-form" onSubmit={addTx}>
-              <label>Tipe
-                <select name="type"><option value="EXPENSE">Pengeluaran</option><option value="INCOME">Pemasukan</option></select>
-              </label>
-              <label>Jumlah
-                <input name="amount" type="number" min={1} placeholder="0" required />
-              </label>
-              <label>Kategori
-                {categories.length > 0 ? (
-                  <select name="category" required>
-                    <option value="">Pilih kategori</option>
-                    {categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
-                  </select>
-                ) : <input name="category" placeholder="Contoh: Makanan" required />}
-              </label>
-              <label>Tanggal
-                <input name="date" type="date" defaultValue={todayInput} required />
-              </label>
-              <label>Dompet
-                {wallets.length > 0 ? (
-                  <select name="walletId">
-                    <option value="">Tanpa dompet</option>
-                    {wallets.map((wallet) => <option key={wallet.id} value={wallet.id}>{wallet.name}</option>)}
-                  </select>
-                ) : <input value="Buat dompet di bawah" readOnly />}
-              </label>
-              <label className="full-field">Catatan
-                <input name="note" placeholder="Keterangan opsional" />
-              </label>
-              <button className="primary-button full-field" type="submit">Simpan transaksi</button>
-            </form>
-          </section>
 
-          <section className="panel category-panel">
-            <div className="panel-heading">
-              <div><p className="panel-kicker">Analisis</p><h2>Pengeluaran per kategori</h2></div>
-            </div>
-            {sum && sum.byCategory.length > 0 ? (
-              <div className="category-list">
-                {sum.byCategory.slice(0, 5).map((c, index) => {
-                  const width = sum.expense ? Math.max(8, Math.round(c.total / sum.expense * 100)) : 0;
-                  return (
-                    <div className="category-row" key={c.category}>
-                      <div className="category-meta">
-                        <span><i className={`category-dot dot-${index % 5}`} />{c.category}</span>
-                        <strong>{rp(c.total)}</strong>
-                      </div>
-                      <div className="category-track"><div className={`category-fill dot-${index % 5}`} style={{ width: `${width}%` }} /></div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : <div className="empty-small"><span>◫</span><p>Belum ada pengeluaran bulan ini.</p></div>}
-          </section>
-        </div>
-
-        <div className="management-grid">
-          <section className="panel management-panel">
-            <div className="panel-heading"><div><p className="panel-kicker">Tempat uang</p><h2>Dompet</h2></div></div>
-            <div className="wallet-list">
-              {wallets.length === 0 ? <p className="muted-copy">Belum ada dompet.</p> : wallets.map((wallet) => (
-                <div className="wallet-chip" key={wallet.id}>
-                  <span>{wallet.name}<small>Saldo awal {rp(wallet.initialBalance)}</small></span>
-                  <strong>{rp(wallet.balance)}</strong>
-                  <span className="mini-actions">
-                    <button type="button" className="icon-button" title="Ubah dompet" onClick={() => editWallet(wallet)}>✎</button>
-                    <button type="button" className="icon-button danger" title="Hapus dompet" onClick={() => removeWallet(wallet)}>×</button>
-                  </span>
+            <div className="sheet-grid two-col">
+              <section className="sheet">
+                <div className="sheet-head">
+                  <div><span className="sheet-kicker">Catatan baru</span><h2>Tambah transaksi</h2></div>
                 </div>
-              ))}
-            </div>
-            <form className="compact-form" onSubmit={addWallet}>
-              <input name="name" placeholder="Nama dompet" required />
-              <input name="initialBalance" type="number" min={0} placeholder={`Saldo awal (${profile?.currency ?? "IDR"})`} />
-              <button type="submit">Tambah</button>
-            </form>
-          </section>
+                <form className="quick-form" key={todayInput} onSubmit={addTx}>
+                  <div className="type-switch" role="group" aria-label="Jenis transaksi">
+                    <button
+                      className={txType === "EXPENSE" ? "active expense" : ""}
+                      type="button"
+                      onClick={() => setTxType("EXPENSE")}
+                    >
+                      <Icon name="expense" size={16} /> Pengeluaran
+                    </button>
+                    <button
+                      className={txType === "INCOME" ? "active income" : ""}
+                      type="button"
+                      onClick={() => setTxType("INCOME")}
+                    >
+                      <Icon name="income" size={16} /> Pemasukan
+                    </button>
+                    <input type="hidden" name="type" value={txType} />
+                  </div>
+                  <div className="field-grid">
+                    <label className="field">Jumlah ({profile?.currency ?? "IDR"})
+                      <input name="amount" type="number" min={1} step={1} placeholder="0" required />
+                    </label>
+                    <label className="field">Tanggal
+                      <input name="date" type="date" defaultValue={todayInput} required />
+                    </label>
+                  </div>
+                  <label className="field">Kategori
+                    {quickCategories.length > 0 ? (
+                      <select name="category" required>
+                        <option value="">Pilih kategori</option>
+                        {quickCategories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
+                      </select>
+                    ) : (
+                      <input name="category" placeholder="Contoh: Makanan" required />
+                    )}
+                  </label>
+                  <label className="field">Dompet
+                    <select name="walletId">{walletOptions()}</select>
+                  </label>
+                  <label className="field">Catatan
+                    <input name="note" placeholder="Tulis sesuai kebutuhan kamu" />
+                  </label>
+                  <button className="btn btn-primary wide" type="submit"><Icon name="plus" size={16} /> Simpan transaksi</button>
+                </form>
+              </section>
 
-          <section className="panel management-panel">
-            <div className="panel-heading"><div><p className="panel-kicker">Pengelompokan</p><h2>Kategori</h2></div></div>
-            <div className="category-tags">
-              {categories.length === 0 ? <p className="muted-copy">Belum ada kategori.</p> : categories.map((category) => (
-                <span key={category.id}>
-                  {category.name}<i>{category.type === "INCOME" ? "Masuk" : "Keluar"}</i>
-                  <button type="button" className="icon-button" title="Ubah kategori" onClick={() => editCategory(category)}>✎</button>
-                  <button type="button" className="icon-button danger" title="Hapus kategori" onClick={() => removeCategory(category)}>×</button>
-                </span>
-              ))}
+              <section className="sheet">
+                <div className="sheet-head">
+                  <div><span className="sheet-kicker">Analisis</span><h2>Keluar ke mana</h2></div>
+                  <span className="tag">{monthLabel}</span>
+                </div>
+                {sum && sum.byCategory.length > 0 ? (
+                  <div className="breakdown">
+                    {sum.byCategory.slice(0, 6).map((item, index) => {
+                      const width = sum.expense ? Math.max(6, Math.round(item.total / sum.expense * 100)) : 0;
+                      return (
+                        <div className="breakdown-row" key={item.category}>
+                          <div className="breakdown-meta">
+                            <span><i className={`dot dot-${index % 5}`} />{item.category}</span>
+                            <strong>{rp(item.total)}</strong>
+                          </div>
+                          <div className="breakdown-track"><div className={`breakdown-fill dot-${index % 5}`} style={{ width: `${width}%` }} /></div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="empty-inline"><Icon name="target" /><p>Belum ada pengeluaran bulan ini.</p></div>
+                )}
+              </section>
             </div>
-            <form className="compact-form" onSubmit={addCategory}>
-              <input name="name" placeholder="Nama kategori" required />
-              <select name="type"><option value="EXPENSE">Pengeluaran</option><option value="INCOME">Pemasukan</option></select>
-              <button type="submit">Tambah</button>
-            </form>
-          </section>
 
-          <section className="panel management-panel">
-            <div className="panel-heading"><div><p className="panel-kicker">Batas bulanan</p><h2>Anggaran</h2></div></div>
-            <div className="budget-list">
-              {budgets.length === 0 ? <p className="muted-copy">Belum ada anggaran bulan ini.</p> : budgets.map((budget) => {
-                const spent = sum?.byCategory.find((item) =>
-                  budget.categoryId != null && item.categoryId != null
-                    ? item.categoryId === budget.categoryId
-                    : item.category === budget.category.name,
-                )?.total ?? 0;
-                const percent = Math.min(100, budget.limit ? Math.round(spent / budget.limit * 100) : 0);
-                return (
-                  <div className={`budget-row ${percent >= 100 ? "over" : percent >= 80 ? "near" : ""}`} key={budget.id}>
-                    <div>
-                      <span>{budget.category.name}</span>
-                      <strong>{rp(spent)} / {rp(budget.limit)}</strong>
-                      <span className="mini-actions">
-                        <button type="button" className="icon-button" title="Ubah batas" onClick={() => editBudget(budget)}>✎</button>
-                        <button type="button" className="icon-button danger" title="Hapus anggaran" onClick={() => removeBudget(budget)}>×</button>
+            <section className="sheet">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Aktivitas terbaru</span><h2>Catatan terakhir</h2></div>
+                <button className="btn btn-small" type="button" onClick={() => openSection("transactions")}>Lihat semua</button>
+              </div>
+              {txs.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon"><Icon name="list" /></div>
+                  <h3>Buku kas masih kosong</h3>
+                  <p>Isi transaksi pertama di atas, nanti semua riwayatnya bisa diunduh.</p>
+                </div>
+              ) : (
+                <div className="compact-list">
+                  {txs.slice(0, 5).map((item) => (
+                    <div className="compact-row" key={item.id}>
+                      <span className={`tx-icon ${item.type === "INCOME" ? "income-icon" : "expense-icon"}`}>
+                        <Icon name={item.type === "INCOME" ? "income" : "expense"} size={16} />
+                      </span>
+                      <span className="compact-main">
+                        <strong>{item.category}</strong>
+                        <small>{item.note || "Tanpa catatan"} · {displayDate(item.dateKey ?? item.date.slice(0, 10))}</small>
+                      </span>
+                      <strong className={item.type === "INCOME" ? "income-text" : "expense-text"}>
+                        {item.type === "INCOME" ? "+" : "−"}{rp(item.amount)}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </>
+        )}
+
+        {activeSection === "transactions" && (
+          <>
+            <section className="export-strip">
+              <div>
+                <span className="sheet-kicker">Arsip</span>
+                <h2>Unduh riwayat transaksi</h2>
+                <p>Isinya lengkap sesuai tulisan kamu: tanggal, tipe, kategori, dompet, jumlah, dan catatan.</p>
+              </div>
+              <div className="export-actions">
+                <a className="btn btn-quiet" href={`/api/transactions/export?format=csv${exportSuffix ? `&${exportSuffix}` : ""}`}>
+                  <Icon name="download" size={16} /> Unduh CSV
+                </a>
+                <a className="btn btn-primary" href={`/api/transactions/export?format=pdf${exportSuffix ? `&${exportSuffix}` : ""}`}>
+                  <Icon name="file" size={16} /> Unduh PDF
+                </a>
+              </div>
+            </section>
+
+            <section className="sheet" id="transaction-history">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Riwayat</span><h2>Semua transaksi</h2></div>
+                <span className="tag">Menampilkan {txs.length} dari {txTotal}</span>
+              </div>
+              <form className="filter-bar" onSubmit={applyFilters}>
+                <label className="search-field"><Icon name="search" size={16} />
+                  <input aria-label="Cari transaksi" placeholder="Cari kategori atau catatan" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+                </label>
+                <select aria-label="Filter kategori" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
+                  <option value="">Semua kategori</option>
+                  {categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
+                </select>
+                <input aria-label="Dari tanggal" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
+                <input aria-label="Sampai tanggal" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
+                <button className="btn btn-primary btn-small" type="submit">Terapkan</button>
+                <button className="btn btn-quiet btn-small" type="button" onClick={resetFilters}>Reset</button>
+              </form>
+
+              {txs.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-icon"><Icon name="list" /></div>
+                  <h3>Belum ada transaksi</h3>
+                  <p>Tambahkan transaksi pertamamu dari halaman Ringkasan.</p>
+                </div>
+              ) : (
+                <div className="transaction-table">
+                  <div className="transaction-head" aria-hidden="true">
+                    <span>Tanggal</span><span>Keterangan</span><span>Dompet</span><span className="align-right">Jumlah</span><span />
+                  </div>
+                  {txs.map((item) => (
+                    <div className="transaction-row" key={item.id}>
+                      <span className="tx-date">{displayDate(item.dateKey ?? item.date.slice(0, 10))}</span>
+                      <span className="tx-main">
+                        <span className={`tx-icon ${item.type === "INCOME" ? "income-icon" : "expense-icon"}`}>
+                          <Icon name={item.type === "INCOME" ? "income" : "expense"} size={15} />
+                        </span>
+                        <span className="tx-copy">
+                          <strong>{item.category}</strong>
+                          <small>{item.note || "Tanpa catatan"}</small>
+                        </span>
+                      </span>
+                      <span className="tx-wallet">{wallets.find((wallet) => wallet.id === item.walletId)?.name ?? "—"}</span>
+                      <strong className={`tx-amount ${item.type === "INCOME" ? "income-text" : "expense-text"}`}>
+                        {item.type === "INCOME" ? "+" : "−"}{rp(item.amount)}
+                      </strong>
+                      <span className="row-actions">
+                        <button className="icon-button" type="button" aria-label="Ubah transaksi" onClick={() => setDialog({ kind: "tx", item })}><Icon name="pencil" size={15} /></button>
+                        <button className="icon-button danger" type="button" aria-label="Hapus transaksi" onClick={() => setDialog({ kind: "deleteTx", item })}><Icon name="trash" size={15} /></button>
                       </span>
                     </div>
-                    <div className="category-track"><div className={percent >= 100 ? "category-fill dot-1" : "category-fill dot-0"} style={{ width: `${percent}%` }} /></div>
-                    {percent >= 100 && <small className="budget-badge over">Melewati batas</small>}
-                    {percent >= 80 && percent < 100 && <small className="budget-badge">Hampir habis</small>}
-                  </div>
-                );
-              })}
-            </div>
-            <form className="compact-form" onSubmit={addBudget}>
-              <select name="categoryId" required>
-                <option value="">Kategori</option>
-                {categories.filter((category) => category.type === "EXPENSE").map((category) => (
-                  <option key={category.id} value={category.id}>{category.name}</option>
-                ))}
-              </select>
-              <input name="limit" type="number" min={1} placeholder={`Batas (${profile?.currency ?? "IDR"})`} required />
-              <button type="submit">Atur</button>
-            </form>
-          </section>
-        </div>
-
-        <section className="panel profile-panel" id="profile">
-          <div className="panel-heading">
-            <div><p className="panel-kicker">Preferensi akun</p><h2>Profil</h2></div>
-            <span className="transaction-count">{profile?.email ?? ""}</span>
-          </div>
-          <form className="profile-form" onSubmit={saveProfile}>
-            <label>Nama
-              <input value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} minLength={2} maxLength={60} required />
-            </label>
-            <label>Zona waktu
-              <select value={profileForm.timezone} onChange={(e) => setProfileForm({ ...profileForm, timezone: e.target.value })}>
-                {TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
-              </select>
-            </label>
-            <label>Mata uang
-              <select value={profileForm.currency} onChange={(e) => setProfileForm({ ...profileForm, currency: e.target.value })}>
-                {CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
-              </select>
-            </label>
-            <button className="primary-button" type="submit">Simpan profil</button>
-          </form>
-          <p className="muted-copy">Tanggal yang sudah tercatat tidak berubah saat zona waktu diganti.</p>
-        </section>
-
-        <section className="panel sessions-panel" id="sessions">
-          <div className="panel-heading">
-            <div><p className="panel-kicker">Keamanan akun</p><h2>Perangkat aktif</h2></div>
-            <button className="text-button" type="button" onClick={revokeOtherSessions}>Cabut perangkat lain</button>
-          </div>
-          {sessions.length === 0 ? (
-            <p className="muted-copy">Belum ada sesi yang tercatat.</p>
-          ) : (
-            <div className="session-list">
-              {sessions.map((item) => (
-                <div className="session-row" key={item.id}>
-                  <div className="session-detail">
-                    <strong>{item.label}</strong>
-                    <span>{item.current ? "Perangkat ini · " : ""}{item.ip ? `${item.ip} · ` : ""}terakhir dipakai {fmtDateTime(item.lastUsedAt)}</span>
-                    <small>Masuk {fmtDateTime(item.createdAt)} · berlaku sampai {fmtDateTime(item.expiresAt)}</small>
-                  </div>
-                  {item.current ? (
-                    <button className="text-button" type="button" onClick={() => logout()}>Keluar</button>
-                  ) : (
-                    <button className="text-button" type="button" onClick={() => revokeSession(item)}>Cabut</button>
-                  )}
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-          <p className="muted-copy">Login dari perangkat baru otomatis dikirimi notifikasi ke email kamu.</p>
-        </section>
+              )}
+              {txs.length < txTotal && (
+                <button className="btn btn-quiet wide" type="button" onClick={() => void loadMore()}>Muat lebih banyak</button>
+              )}
+            </section>
+          </>
+        )}
 
-        <section className="panel history-panel" id="transaction-history">
-          <div className="panel-heading">
-            <div><p className="panel-kicker">Aktivitas terbaru</p><h2>Riwayat transaksi</h2></div>
-            <span className="transaction-count">Menampilkan {txs.length} dari {txTotal} transaksi</span>
+        {activeSection === "manage" && (
+          <div className="management-grid">
+            <section className="sheet">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Tempat uang</span><h2>Dompet</h2></div>
+                <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "wallet" })}><Icon name="plus" size={14} /> Tambah</button>
+              </div>
+              {wallets.length === 0 ? (
+                <div className="empty-inline"><Icon name="wallet" /><p>Belum ada dompet.</p></div>
+              ) : (
+                <div className="item-list">
+                  {wallets.map((wallet) => (
+                    <div className="item-row" key={wallet.id}>
+                      <span className="item-icon"><Icon name="wallet" size={16} /></span>
+                      <span className="item-main"><strong>{wallet.name}</strong><small>Saldo awal {rp(wallet.initialBalance)}</small></span>
+                      <strong className="item-value">{rp(wallet.balance)}</strong>
+                      <span className="row-actions">
+                        <button className="icon-button" type="button" aria-label="Ubah dompet" onClick={() => setDialog({ kind: "wallet", item: wallet })}><Icon name="pencil" size={15} /></button>
+                        <button className="icon-button danger" type="button" aria-label="Hapus dompet" onClick={() => setDialog({ kind: "deleteWallet", item: wallet })}><Icon name="trash" size={15} /></button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {wallets.length > 0 && <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "wallet" })}>Tambah dompet</button>}
+            </section>
+
+            <section className="sheet">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Pengelompokan</span><h2>Kategori</h2></div>
+                <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "category" })}><Icon name="plus" size={14} /> Tambah</button>
+              </div>
+              {categories.length === 0 ? (
+                <div className="empty-inline"><Icon name="tag" /><p>Belum ada kategori.</p></div>
+              ) : (
+                <div className="item-list">
+                  {categories.map((category) => (
+                    <div className="item-row" key={category.id}>
+                      <span className="item-icon"><Icon name="tag" size={16} /></span>
+                      <span className="item-main"><strong>{category.name}</strong><small>{category.type === "INCOME" ? "Pemasukan" : "Pengeluaran"}</small></span>
+                      <span className="row-actions">
+                        <button className="icon-button" type="button" aria-label="Ubah kategori" onClick={() => setDialog({ kind: "category", item: category })}><Icon name="pencil" size={15} /></button>
+                        <button className="icon-button danger" type="button" aria-label="Hapus kategori" onClick={() => setDialog({ kind: "deleteCategory", item: category })}><Icon name="trash" size={15} /></button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="sheet">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Batas bulanan</span><h2>Anggaran</h2></div>
+                <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "budget" })}><Icon name="plus" size={14} /> Tambah</button>
+              </div>
+              {budgets.length === 0 ? (
+                <div className="empty-inline"><Icon name="target" /><p>Belum ada anggaran bulan ini.</p></div>
+              ) : (
+                <div className="item-list">
+                  {budgets.map((budget) => {
+                    const spent = sum?.byCategory.find((item) =>
+                      budget.categoryId != null && item.categoryId != null
+                        ? item.categoryId === budget.categoryId
+                        : item.category === budget.category.name,
+                    )?.total ?? 0;
+                    const percent = Math.min(100, budget.limit ? Math.round(spent / budget.limit * 100) : 0);
+                    return (
+                      <div className={`item-row budget-row ${percent >= 100 ? "over" : ""}`} key={budget.id}>
+                        <span className="item-main">
+                          <strong>{budget.category.name}</strong>
+                          <small>{rp(spent)} / {rp(budget.limit)}</small>
+                          <span className="breakdown-track"><span className={`breakdown-fill ${percent >= 100 ? "dot-1" : "dot-0"}`} style={{ width: `${percent}%` }} /></span>
+                        </span>
+                        <span className="row-actions">
+                          <button className="icon-button" type="button" aria-label="Ubah anggaran" onClick={() => setDialog({ kind: "budget", item: budget })}><Icon name="pencil" size={15} /></button>
+                          <button className="icon-button danger" type="button" aria-label="Hapus anggaran" onClick={() => setDialog({ kind: "deleteBudget", item: budget })}><Icon name="trash" size={15} /></button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
-          <form className="filter-bar" onSubmit={applyFilters}>
-            <input aria-label="Cari transaksi" placeholder="Cari kategori atau catatan…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
-            <select aria-label="Filter kategori" value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>
-              <option value="">Semua kategori</option>
-              {categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
-            </select>
-            <input aria-label="Dari tanggal" type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
-            <input aria-label="Sampai tanggal" type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
-            <button type="submit">Terapkan</button>
-            <button type="button" className="ghost-button" onClick={resetFilters}>Reset</button>
-          </form>
-          {txs.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">⇄</div>
-              <h3>Belum ada transaksi</h3>
-              <p>Tambahkan transaksi pertamamu untuk memulai pencatatan.</p>
-            </div>
-          ) : (
-            <div className="transaction-list">
-              {txs.map((t) => (
-                <article className="transaction-row" key={t.id}>
-                  <div className={`transaction-icon ${t.type === "INCOME" ? "income-icon" : "expense-icon"}`}>
-                    {t.type === "INCOME" ? "↙" : "↗"}
+        )}
+
+        {activeSection === "settings" && (
+          <>
+            <div className="settings-grid">
+              <section className="sheet" id="profile">
+                <div className="sheet-head">
+                  <div><span className="sheet-kicker">Preferensi akun</span><h2>Profil</h2></div>
+                  <span className="tag">{profile?.email ?? ""}</span>
+                </div>
+                <form className="profile-form" onSubmit={saveProfile}>
+                  <label className="field">Nama
+                    <input value={profileForm.name} onChange={(e) => setProfileForm({ ...profileForm, name: e.target.value })} minLength={2} maxLength={60} required />
+                  </label>
+                  <label className="field">Zona waktu
+                    <select value={profileForm.timezone} onChange={(e) => setProfileForm({ ...profileForm, timezone: e.target.value })}>
+                      {TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">Mata uang
+                    <select value={profileForm.currency} onChange={(e) => setProfileForm({ ...profileForm, currency: e.target.value })}>
+                      {CURRENCIES.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
+                    </select>
+                  </label>
+                  <button className="btn btn-primary" type="submit">Simpan profil</button>
+                </form>
+                <p className="modal-note">Tanggal yang sudah tercatat tidak berubah saat zona waktu diganti.</p>
+              </section>
+
+              <section className="sheet" id="sessions">
+                <div className="sheet-head">
+                  <div><span className="sheet-kicker">Keamanan akun</span><h2>Perangkat aktif</h2></div>
+                  <button className="btn btn-small" type="button" onClick={() => setDialog({
+                    kind: "confirm",
+                    title: "Cabut perangkat lain?",
+                    description: "Perangkat yang sedang kamu pakai tetap masuk.",
+                    action: "revoke-others",
+                  })}>Cabut lainnya</button>
+                </div>
+                {sessions.length === 0 ? (
+                  <div className="empty-inline"><Icon name="shield" /><p>Belum ada sesi yang tercatat.</p></div>
+                ) : (
+                  <div className="session-list">
+                    {sessions.map((item) => (
+                      <div className="session-row" key={item.id}>
+                        <span className="item-icon"><Icon name="shield" size={16} /></span>
+                        <span className="session-detail">
+                          <strong>{item.label}{item.current ? " · perangkat ini" : ""}</strong>
+                          <small>{item.ip ? `${item.ip} · ` : ""}terakhir dipakai {fmtDateTime(item.lastUsedAt)}</small>
+                        </span>
+                        <button
+                          className="btn btn-small"
+                          type="button"
+                          onClick={() => item.current
+                            ? void logout()
+                            : setDialog({
+                              kind: "confirm",
+                              title: `Cabut "${item.label}"?`,
+                              description: "Perangkat itu harus masuk lagi sebelum bisa membaca data.",
+                              action: "revoke-session",
+                              item,
+                            })}
+                        >
+                          {item.current ? "Keluar" : "Cabut"}
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                  <div className="transaction-info">
-                    <strong>{t.category}</strong>
-                    <span>{t.note || "Tanpa catatan"} · {displayDate(t.dateKey ?? t.date.slice(0, 10))}</span>
-                  </div>
-                  <strong className={t.type === "INCOME" ? "income-text" : "expense-text"}>
-                    {t.type === "INCOME" ? "+" : "−"}{rp(t.amount)}
-                  </strong>
-                  <button className="delete-button" type="button" title="Hapus transaksi" onClick={() => remove(t.id)}>×</button>
-                </article>
-              ))}
+                )}
+                <p className="modal-note">Login dari perangkat baru otomatis dikirimi notifikasi ke email kamu.</p>
+              </section>
             </div>
-          )}
-          {txs.length < txTotal && (
-            <button className="text-button" type="button" onClick={loadMore} style={{ marginTop: 12 }}>Muat lebih banyak</button>
-          )}
-        </section>
+
+            <section className="sheet danger-zone">
+              <div className="sheet-head">
+                <div><span className="sheet-kicker">Mulai lagi dari nol</span><h2>Hapus semua data keuangan</h2></div>
+                <span className="tag danger-tag"><Icon name="alert" size={14} /> Tidak bisa dibatalkan</span>
+              </div>
+              <div className="danger-copy">
+                <p>Menghapus seluruh transaksi, dompet, kategori, anggaran, dan sesi login. Email dan password kamu tetap dipakai untuk masuk.</p>
+                <button className="btn btn-danger" type="button" onClick={() => { setResetPhrase(""); setDialog({ kind: "reset" }); }}>
+                  <Icon name="trash" size={16} /> Reset data keuangan
+                </button>
+              </div>
+            </section>
+          </>
+        )}
+
+        <footer className="footer-note">Finwise · buku kas harian · data tersimpan di akun kamu</footer>
       </section>
+
+      {dialog && dialogMeta && (
+        <Modal title={dialogMeta.title} description={dialogMeta.description} onClose={() => { if (!busy) setDialog(null); }}>
+          {renderDialogBody()}
+        </Modal>
+      )}
     </main>
   );
 }

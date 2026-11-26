@@ -6,6 +6,7 @@ export type Tx = {
   note: string | null;
   date: string;
   dateKey?: string;
+  walletId?: number | null;
 };
 
 export type Profile = { name: string; email: string; timezone: string; currency: string };
