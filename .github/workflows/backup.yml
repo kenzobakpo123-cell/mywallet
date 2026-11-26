@@ -33,7 +33,7 @@ jobs:
           node scripts/backup-encrypted.mjs
 
       - name: Simpan artefak backup
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: finwise-backup-${{ github.run_id }}
           path: backups/*.enc
