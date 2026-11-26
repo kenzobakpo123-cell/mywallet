@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getViewer } from "@/lib/auth";
 import { protectArcjet } from "@/lib/arcjet";
 import { audit } from "@/lib/audit";
 import { db } from "@/lib/db";
 import { forbidden, isSameOrigin } from "@/lib/security";
+import { twoFactorActor } from "@/lib/two-factor-actor";
 import { encryptTotpSecret, generateRecoveryCodes, newTotpSecret, otpauthUri } from "@/lib/two-factor";
 
 const unauthorized = () => NextResponse.json({ error: "Silakan masuk terlebih dahulu." }, { status: 401 });
 
 export async function POST(req: NextRequest) {
-  const viewer = await getViewer(req);
-  if (!viewer) return unauthorized();
+  const body = await req.json().catch(() => ({}));
+  const actor = await twoFactorActor(req, body);
+  if (!actor) return unauthorized();
   if (!isSameOrigin(req)) return forbidden();
 
   const guard = await protectArcjet(req, "write");
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest) {
   }
 
   const user = await db.user.findUnique({
-    where: { id: viewer.uid },
+    where: { id: actor.uid },
     select: { email: true, twoFactorEnabled: true },
   });
   if (!user) return unauthorized();
@@ -31,10 +32,10 @@ export async function POST(req: NextRequest) {
   const secret = newTotpSecret();
   const recoveryCodes = generateRecoveryCodes();
   await db.user.update({
-    where: { id: viewer.uid },
+    where: { id: actor.uid },
     data: { twoFactorPendingSecret: encryptTotpSecret(secret) },
   });
-  void audit({ action: "TWO_FACTOR_SETUP", userId: viewer.uid, entity: "User", entityId: viewer.uid, req });
+  void audit({ action: "TWO_FACTOR_SETUP", userId: actor.uid, entity: "User", entityId: actor.uid, req });
 
   return NextResponse.json({
     otpauthUri: otpauthUri(user.email, secret),

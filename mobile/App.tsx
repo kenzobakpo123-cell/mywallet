@@ -187,6 +187,12 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
   const [challenge, setChallenge] = useState("");
   const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [setupChallenge, setSetupChallenge] = useState<{
+    challengeToken: string;
+    secret: string;
+    recoveryCodes: string[];
+  } | null>(null);
+  const [setupCode, setSetupCode] = useState("");
   const [form, setForm] = useState<Form>(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [items, setItems] = useState<Tx[]>([]);
@@ -291,11 +297,34 @@ export default function App() {
       setMode("login");
       return Alert.alert("Berhasil", r.d.message ?? r.d.warning ?? "Cek email untuk verifikasi sebelum masuk.");
     }
+    if (r.d.twoFactorSetupRequired && typeof r.d.challengeToken === "string") {
+      const setup = await call("/api/auth/2fa/setup", "POST", { challengeToken: r.d.challengeToken });
+      if (!setup.ok) return Alert.alert("Gagal", setup.d.error ?? "Gagal menyiapkan 2FA.");
+      setSetupCode("");
+      setSetupChallenge({
+        challengeToken: r.d.challengeToken,
+        secret: setup.d.secret,
+        recoveryCodes: setup.d.recoveryCodes ?? [],
+      });
+      return;
+    }
     if (r.d.twoFactorRequired && typeof r.d.challengeToken === "string") {
       setTwoFactorCode("");
       setChallenge(r.d.challengeToken);
       return;
     }
+    await saveSession(r.d.token, r.d.refreshToken);
+  }
+
+  async function verifyForcedSetup() {
+    if (!setupChallenge || !setupCode.trim()) return;
+    const r = await call("/api/auth/2fa/enable", "POST", {
+      challengeToken: setupChallenge.challengeToken,
+      code: setupCode.trim(),
+      recoveryCodes: setupChallenge.recoveryCodes,
+    });
+    if (!r.ok) return Alert.alert("Gagal", r.d.error ?? "Kode tidak cocok.");
+    setSetupChallenge(null);
     await saveSession(r.d.token, r.d.refreshToken);
   }
 
@@ -432,6 +461,28 @@ export default function App() {
     );
 
   if (!ready) return <SafeAreaView style={styles.screen}><Text>Memuat…</Text></SafeAreaView>;
+
+  if (setupChallenge && !token)
+    return (
+      <SafeAreaView style={styles.screen}>
+        <Text style={styles.title}>Pasang authenticator</Text>
+        <Text style={styles.muted}>Wajib untuk akun ini. Masukkan kunci berikut di aplikasi authenticator.</Text>
+        <Text style={styles.box} selectable>{setupChallenge.secret}</Text>
+        <Text style={styles.muted}>Simpan kode pemulihan ini (hanya muncul sekali):</Text>
+        <Text style={styles.box} selectable>{setupChallenge.recoveryCodes.join("\n")}</Text>
+        <TextInput
+          placeholder="Kode 6 digit"
+          autoComplete="sms-otp"
+          value={setupCode}
+          onChangeText={setSetupCode}
+          style={styles.box}
+        />
+        <Button title="Aktifkan 2FA & masuk" onPress={verifyForcedSetup} />
+        <View style={{ marginTop: 10 }}>
+          <Button title="Kembali" onPress={() => { setSetupChallenge(null); setSetupCode(""); }} />
+        </View>
+      </SafeAreaView>
+    );
 
   if (challenge && !token)
     return (

@@ -71,3 +71,43 @@ export const recoveryUsedEmail = (link: string, device: string, ip: string) =>
     link,
     "Periksa keamanan",
   );
+
+/** Dikirim setelah password berhasil direset. */
+export const passwordChangedEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "Password Finwise kamu diubah",
+    `Password akunmu baru saja diubah dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Kalau itu kamu, tidak perlu melakukan apa pun. Kalau bukan kamu, cabut semua sesi dan hubungi pemilik aplikasi.",
+    link,
+    "Periksa perangkat",
+  );
+
+/** Dikirim saat 2FA dimatikan — peristiwa kritis yang harus diketahui pemilik. */
+export const twoFactorDisabledEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "2FA Finwise dinonaktifkan",
+    `Autentikasi dua faktor akunmu baru saja dimatikan dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Kalau itu kamu, tidak perlu melakukan apa pun. Kalau bukan kamu, ganti password sekarang dan aktifkan kembali 2FA.",
+    link,
+    "Periksa keamanan",
+  );
+
+/** Dikirim saat sistem mencabut sesi karena banyak percobaan login gagal. */
+export const securityLockoutEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "Aktivitas login mencurigakan di Finwise",
+    `Ada beberapa percobaan masuk dengan password salah dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Semua sesi aktif sudah dicabut otomatis untuk melindungi akunmu. Kalau itu kamu, cukup masuk lagi. Kalau bukan kamu, ganti password sekarang.",
+    link,
+    "Periksa keamanan",
+  );
+
+/** Dikirim setelah kode pemulihan 2FA dibuat ulang. */
+export const recoveryRegeneratedEmail = (link: string, device: string, ip: string) =>
+  shell(
+    "Kode pemulihan Finwise dibuat ulang",
+    `Kode pemulihan 2FA akunmu baru saja diganti dari <strong>${escapeHtml(device)}</strong>${ip ? ` (IP ${escapeHtml(ip)})` : ""}. ` +
+      "Kode lama sudah tidak berlaku. Simpan kode yang baru di tempat aman.",
+    link,
+    "Periksa keamanan",
+  );

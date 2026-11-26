@@ -178,3 +178,38 @@ export async function verifyTwoFactorChallenge(token: string): Promise<TwoFactor
     return null;
   }
 }
+
+const SETUP_ISSUER = "finwise-2fa-setup";
+const SETUP_AUDIENCE = "finwise-2fa-setup-challenge";
+
+/**
+ * Challenge khusus untuk akun yang diwajibkan memasang 2FA. Diberikan setelah
+ * password benar, sebelum ada sesi, supaya setup tetap bisa diselesaikan.
+ */
+export async function signTwoFactorSetupChallenge(data: TwoFactorChallenge): Promise<string> {
+  return new SignJWT({ tv: data.tv, native: data.issueToken })
+    .setProtectedHeader({ alg: "HS256" })
+    .setSubject(String(data.uid))
+    .setIssuer(SETUP_ISSUER)
+    .setAudience(SETUP_AUDIENCE)
+    .setIssuedAt()
+    .setExpirationTime("5m")
+    .sign(challengeSecret());
+}
+
+export async function verifyTwoFactorSetupChallenge(token: string): Promise<TwoFactorChallenge | null> {
+  try {
+    const { payload } = await jwtVerify(token, challengeSecret(), {
+      algorithms: ["HS256"],
+      issuer: SETUP_ISSUER,
+      audience: SETUP_AUDIENCE,
+    });
+    if (typeof payload.sub !== "string" || !/^\d+$/.test(payload.sub)) return null;
+    const uid = Number(payload.sub);
+    if (!Number.isSafeInteger(uid) || uid <= 0) return null;
+    if (typeof payload.tv !== "number" || !Number.isSafeInteger(payload.tv)) return null;
+    return { uid, tv: payload.tv, issueToken: payload.native === true };
+  } catch {
+    return null;
+  }
+}

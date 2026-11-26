@@ -6,7 +6,9 @@ type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 let lastCleanup = 0;
 
-export function rateLimit(key: string, limit: number, windowMs: number) {
+export type RateLimitResult = { allowed: boolean; retryAfter: number; count: number };
+
+export function rateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
   const now = Date.now();
   if (now - lastCleanup > 60_000) {
     for (const [k, v] of buckets) if (v.resetAt <= now) buckets.delete(k);
@@ -15,13 +17,17 @@ export function rateLimit(key: string, limit: number, windowMs: number) {
   const rec = buckets.get(key);
   if (!rec || rec.resetAt <= now) {
     buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return { allowed: true, retryAfter: 0 };
+    return { allowed: true, retryAfter: 0, count: 1 };
   }
   if (rec.count >= limit) {
-    return { allowed: false, retryAfter: Math.max(1, Math.ceil((rec.resetAt - now) / 1000)) };
+    return {
+      allowed: false,
+      retryAfter: Math.max(1, Math.ceil((rec.resetAt - now) / 1000)),
+      count: rec.count,
+    };
   }
   rec.count += 1;
-  return { allowed: true, retryAfter: 0 };
+  return { allowed: true, retryAfter: 0, count: rec.count };
 }
 
 const IP_PATTERN = /^[0-9a-fA-F.:]+$/;

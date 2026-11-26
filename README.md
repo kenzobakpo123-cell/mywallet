@@ -9,6 +9,7 @@
    - `ARCJET_KEY` didapat gratis di https://app.arcjet.com. Kalau dikosongkan, aplikasi masih jalan dengan rate limiter in-memory.
    - `RESEND_API_KEY` + `EMAIL_FROM` dipakai untuk verifikasi email, reset password, dan notifikasi keamanan. Di development tanpa key, tautan dicetak di terminal instead of dikirim.
    - `ALLOWED_EMAILS` berisi daftar email yang boleh mendaftar, dipisah koma (`@domain.com` juga boleh). Wajib di production; kosong hanya boleh di development.
+   - `REQUIRE_2FA_EMAILS` berisi akun yang **wajib** memasang 2FA sebelum bisa masuk, dengan format yang sama seperti `ALLOWED_EMAILS`.
 3. `npm install`
 4. `npm run db:migrate` (menerapkan file di `prisma/migrations`). Untuk lingkungan lokal saat mengubah skema, pakai `npm run db:migrate:dev`. Cek dengan `npm run db:status`.
    - `npm run db:push` tetap ada sebagai jalan pintas, tapi **tidak disarankan lagi** untuk tim/produksi karena tidak menyimpan riwayat migrasi.
@@ -51,25 +52,27 @@
 - Menu **Perangkat** menampilkan perangkat aktif, IP, dan waktu terakhir dipakai. Kamu bisa mencabut satu perangkat atau semua perangkat lain. Login dari perangkat baru memicu notifikasi email.
 - **Keluar** hanya mencabut perangkat yang sedang dipakai. Reset password tetap mencabut semua sesi sekaligus.
 - Pendaftaran hanya untuk email yang tercantum di `ALLOWED_EMAILS`, dan wajib verifikasi email sebelum bisa masuk. Akun lama otomatis dianggap terverifikasi oleh migrasi `20261119000100_auth_email`.
-- Menu **Verifikasi dua faktor** mengaktifkan TOTP (Google Authenticator/1Password/Authy) dengan 8 kode pemulihan sekali pakai. Kode TOTP dienkripsi AES-GCM, kode pemulihan disimpan sebagai hash SHA-256. Nonaktifkan 2FA mencabut semua sesi dan mengharuskan login ulang.
-- Percobaan login dengan password salah pada akun yang benar memicu email peringatan (maksimal satu per 15 menit). Pemakaian kode pemulihan 2FA juga memicu notifikasi.
-- Menu **Lihat aktivitas** menampilkan audit log milik akun sendiri: login, perubahan profil/anggaran, 2FA, dan reset data.
+- Menu **Verifikasi dua faktor** mengaktifkan TOTP (Google Authenticator/1Password/Authy) dengan 8 kode pemulihan sekali pakai. Tombol **Kode pemulihan baru** membuat kode baru setelah konfirmasi password + kode 2FA. Kode TOTP dienkripsi AES-GCM, kode pemulihan disimpan sebagai hash SHA-256. Nonaktifkan 2FA mencabut semua sesi dan mengharuskan login ulang.
+- Email di `REQUIRE_2FA_EMAILS` tidak bisa masuk hanya dengan password: setelah password benar, pengguna langsung disuruh memasang authenticator, lalu session dibuat setelah 2FA aktif. Berlaku juga di aplikasi HP.
+- Pendaftaran dan reset password memakai password minimal 12 karakter, tidak boleh kata umum, angka saja, atau pengulangan berlebih. Login akun lama tetap menerima password minimal 8 karakter.
+- Percobaan login dengan password salah pada akun yang benar memicu email peringatan (maksimal satu per 15 menit). Setelah 3 kegagalan, semua sesi dan token akses dicabut otomatis dan email lockout dikirim. Pemakaian kode pemulihan, reset password, pembuatan ulang kode pemulihan, dan penonaktifan 2FA juga memicu notifikasi.
+- Menu **Lihat aktivitas** menampilkan audit log milik akun sendiri: login, perubahan profil/anggaran, 2FA, reset password, dan lockout.
 - Lupa password dan kirim ulang verifikasi tersedia di halaman masuk. Reset password juga menaikkan `tokenVersion`.
 - Rate limit, Shield/WAF, dan validasi email memakai **Arcjet** (`ARCJET_KEY`). Tanpa key, sistem jatuh ke rate limiter in-memory untuk lokal.
 - MySQL bisa dijalankan via Docker: `docker compose up -d` (port `3307` agar tidak bentrok dengan XAMPP). `.env` lalu pakai `mysql://finwise:finwise-rahasia@localhost:3307/keuangan`.
 - Jangan commit file `.env` dengan secret asli. Rotasi `JWT_SECRET` jika pernah terekspos.
 
 ## Produksi
-1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, atau `ALLOWED_EMAILS` tidak valid.
+1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, `ALLOWED_EMAILS`, atau `REQUIRE_2FA_EMAILS` tidak valid.
 2. `docker compose -f docker-compose.prod.yml up -d --build` — menjalankan MySQL + aplikasi, dan migrasi dijalankan otomatis saat container app mulai.
 3. Health check: `GET /api/health` mengembalikan `200` kalau database terhubung.
-4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Hasil ada di folder `backups/`.
+4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Untuk backup terenkripsi, siapkan `BACKUP_PASSPHRASE` (minimal 16 karakter) lalu jalankan `npm run db:backup:secure`. Hasil ada di folder `backups/` yang tidak ikut di-commit. Prosedur rotasi dan respons insiden ada di `docs/SECURITY-RUNBOOK.md`.
 5. CI GitHub Actions menjalankan `lint`, `test`, `migrate`, dan `build` pada setiap push/PR.
 
 ### Deploy ke Vercel + MySQL cloud
 1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
 2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
-3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`), dan `ALLOWED_EMAILS`.
+3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`), `ALLOWED_EMAILS`, dan `REQUIRE_2FA_EMAILS`.
 4. **Tanpa beli domain (cukup untuk mulai):** Vercel otomatis memberi `https://<nama-project>.vercel.app` — gratis, HTTPS, dan SSL otomatis. Pakai URL itu untuk web dan untuk `EXPO_PUBLIC_API_URL` di Expo. Tidak perlu mengubah DNS di IDwebhost.
 5. **Domain sendiri (opsional, berbayar):** di Vercel → **Settings → Domains → Add**, lalu di DNS registrar arahkan `A @` ke `76.76.21.21` dan `CNAME www` ke `cname.vercel-dns.com`.
 6. Resend: untuk mulai, pakai `EMAIL_FROM="Finwise <onboarding@resend.dev>"`. Domain `resend.dev` hanya bisa mengirim ke **email akun Resend kamu sendiri**. Agar bisa mengirim ke email orang lain, tambahkan domain di Resend → **Domains** dan pasang record SPF/DKIM/DMARC di DNS.

@@ -8,10 +8,11 @@ import { authSchema } from "@/lib/schemas";
 import { clientIp, rateLimit } from "@/lib/security";
 import { hashToken, newToken } from "@/lib/tokens";
 import { protectArcjet } from "@/lib/arcjet";
-import { loginFailedEmail, loginNoticeEmail, sendMail } from "@/lib/email";
+import { loginFailedEmail, loginNoticeEmail, securityLockoutEmail, sendMail } from "@/lib/email";
 import { audit } from "@/lib/audit";
 import { publicOrigin } from "@/lib/origin";
-import { signTwoFactorChallenge } from "@/lib/two-factor";
+import { requiresTwoFactor } from "@/lib/allowlist";
+import { signTwoFactorChallenge, signTwoFactorSetupChallenge } from "@/lib/two-factor";
 
 const WRONG = { error: "Email atau password salah" };
 
@@ -24,7 +25,21 @@ type LoginUser = {
   name: string;
   email: string;
   tokenVersion: number;
+  twoFactorEnabled?: boolean;
 };
+
+function notifyLockout(email: string, req: NextRequest): void {
+  // Maksimal satu email lockout per akun per 15 menit.
+  const hit = rateLimit(`login-lockout-mail:${email.trim().toLowerCase()}`, 1, 15 * 60_000);
+  if (!hit.allowed) return;
+
+  const link = `${publicOrigin()}/#security`;
+  void sendMail({
+    to: email,
+    subject: "Aktivitas login mencurigakan di Finwise",
+    html: securityLockoutEmail(link, deviceLabel(req.headers.get("user-agent")), clientIp(req) ?? ""),
+  }).catch((error) => console.error("Gagal mengirim notifikasi penguncian:", error));
+}
 
 function notifyFailedLogin(email: string, req: NextRequest): void {
   // Satu notifikasi per email per 15 menit untuk menghindari email bombing.
@@ -41,6 +56,18 @@ function notifyFailedLogin(email: string, req: NextRequest): void {
 
 /** Dipanggil setelah password (dan 2FA, bila aktif) terverifikasi. */
 export async function completeLogin(req: NextRequest, user: LoginUser, issueToken: boolean) {
+  // Akun yang masuk dalam daftar wajib 2FA tidak boleh mendapat sesi sebelum
+  // authenticator dipasang. Challenge ini hanya berlaku 5 menit.
+  if (requiresTwoFactor(user.email) && !user.twoFactorEnabled) {
+    const challengeToken = await signTwoFactorSetupChallenge({
+      uid: user.id,
+      tv: user.tokenVersion,
+      issueToken,
+    });
+    void audit({ action: "TWO_FACTOR_SETUP_REQUIRED", userId: user.id, entity: "User", entityId: user.id, req });
+    return NextResponse.json({ twoFactorSetupRequired: true, challengeToken });
+  }
+
   void audit({ action: "LOGIN_SUCCESS", userId: user.id, entity: "User", entityId: user.id, req });
 
   const label = deviceLabel(req.headers.get("user-agent"));
@@ -126,7 +153,22 @@ export async function handleLogin(req: NextRequest, issueToken: boolean) {
   const valid = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
   if (!user || !valid) {
     void audit({ action: "LOGIN_FAILED", userId: user?.id ?? null, req });
-    if (user) notifyFailedLogin(user.email, req);
+    if (user) {
+      // Setelah 3 kegagalan dalam jendela yang sama, cabut sesi aktif dan
+      // beri tahu pemilik. Attacker tetap melihat pesan error yang sama.
+      if ((byEmail.count ?? 1) >= 3) {
+        // Cabut refresh session DAN token akses yang sedang berjalan.
+        await db.session.updateMany({
+          where: { userId: user.id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        await db.user.update({ where: { id: user.id }, data: { tokenVersion: { increment: 1 } } });
+        void audit({ action: "SUSPICIOUS_LOGIN_LOCKOUT", userId: user.id, entity: "User", entityId: user.id, req });
+        notifyLockout(user.email, req);
+      } else {
+        notifyFailedLogin(user.email, req);
+      }
+    }
     return NextResponse.json(WRONG, { status: 401 });
   }
   if (!user.emailVerified) {

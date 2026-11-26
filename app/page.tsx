@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { dateKeyInZone, localDateInputValue } from "@/lib/dates";
 import { CURRENCIES, TIMEZONES, displayDate, formatMoney } from "@/lib/preferences";
 import { api } from "@/components/client-api";
-import AuthScreen from "@/components/auth-screen";
+import AuthScreen, { type ForcedSetup } from "@/components/auth-screen";
 import Icon, { type IconName } from "@/components/icons";
 import Modal from "@/components/modal";
 import {
@@ -35,6 +35,8 @@ type Dialog =
   | { kind: "confirm"; title: string; description: string; action: "revoke-session" | "revoke-others"; item?: SessionInfo }
   | { kind: "twofaSetup" }
   | { kind: "twofaDisable" }
+  | { kind: "twofaRecovery" }
+  | { kind: "twofaRecoveryDone" }
   | { kind: "audit" }
   | { kind: "reset" }
   | null;
@@ -62,6 +64,10 @@ const AUDIT_LABELS: Record<string, string> = {
   TWO_FACTOR_SUCCESS: "Verifikasi 2FA berhasil",
   TWO_FACTOR_FAILED: "Verifikasi 2FA gagal",
   TWO_FACTOR_RECOVERY_USED: "Kode pemulihan dipakai",
+  TWO_FACTOR_RECOVERY_REGENERATED: "Kode pemulihan dibuat ulang",
+  TWO_FACTOR_SETUP_REQUIRED: "2FA wajib dipasang",
+  SUSPICIOUS_LOGIN_LOCKOUT: "Sesi dicabut karena login mencurigakan",
+  PASSWORD_RESET: "Password diubah",
   DATA_RESET: "Data keuangan dihapus",
 };
 
@@ -117,6 +123,8 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [twoFactorChallenge, setTwoFactorChallenge] = useState("");
   const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorSetup | null>(null);
+  const [forcedSetup, setForcedSetup] = useState<ForcedSetup | null>(null);
+  const [newRecoveryCodes, setNewRecoveryCodes] = useState<string[]>([]);
   const [security, setSecurity] = useState<SecurityStatus | null>(null);
   const [audits, setAudits] = useState<AuditInfo[]>([]);
   const [auditCursor, setAuditCursor] = useState<string | null>(null);
@@ -231,6 +239,13 @@ export default function Home() {
     const body = Object.fromEntries(new FormData(e.currentTarget));
     const r = await api(`/api/auth/${mode}`, "POST", body);
     if (!r.ok) return setMsg(r.d.error ?? "Gagal");
+    if (r.d.twoFactorSetupRequired && typeof r.d.challengeToken === "string") {
+      const setup = await api<TwoFactorSetup>("/api/auth/2fa/setup", "POST", { challengeToken: r.d.challengeToken });
+      if (!setup.ok) return setMsg(setup.d.error ?? "Gagal menyiapkan 2FA.");
+      setForcedSetup({ challengeToken: r.d.challengeToken, ...setup.d });
+      setMsg("");
+      return;
+    }
     if (r.d.twoFactorRequired && typeof r.d.challengeToken === "string") {
       setTwoFactorChallenge(r.d.challengeToken);
       setMsg("");
@@ -258,6 +273,39 @@ export default function Home() {
   function cancelTwoFactor() {
     setTwoFactorChallenge("");
     setMsg("");
+  }
+
+  async function submitForcedSetup(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const code = String(new FormData(e.currentTarget).get("code") ?? "").trim();
+    if (!forcedSetup || !code) return;
+    const r = await api("/api/auth/2fa/enable", "POST", {
+      challengeToken: forcedSetup.challengeToken,
+      code,
+      recoveryCodes: forcedSetup.recoveryCodes,
+    });
+    if (!r.ok) return setMsg(r.d.error ?? "Kode tidak cocok.");
+    setForcedSetup(null);
+    setMsg("");
+    refresh();
+  }
+
+  function cancelForcedSetup() {
+    setForcedSetup(null);
+    setMsg("");
+  }
+
+  async function regenerateRecovery(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (busy) return;
+    const body = Object.fromEntries(new FormData(e.currentTarget));
+    setBusy(true);
+    const r = await api<{ recoveryCodes: string[] }>("/api/auth/2fa/recovery", "POST", body);
+    setBusy(false);
+    if (!r.ok) return setMsg(r.d.error ?? "Gagal membuat kode pemulihan.");
+    setNewRecoveryCodes(r.d.recoveryCodes ?? []);
+    setDialog({ kind: "twofaRecoveryDone" });
+    void refreshSecurity();
   }
 
   async function refreshSecurity() {
@@ -536,6 +584,9 @@ export default function Home() {
         twoFactor={Boolean(twoFactorChallenge)}
         onTwoFactor={submitTwoFactor}
         onCancelTwoFactor={cancelTwoFactor}
+        forcedSetup={forcedSetup}
+        onForcedSetup={submitForcedSetup}
+        onCancelForcedSetup={cancelForcedSetup}
       />
     );
   }
@@ -565,6 +616,10 @@ export default function Home() {
         return { title: "Aktifkan autentikasi dua faktor", description: "Pindai kode QR, lalu masukkan kode 6 digit untuk mengonfirmasi." };
       case "twofaDisable":
         return { title: "Nonaktifkan 2FA?", description: "Semua perangkat akan dicabut dan kamu perlu masuk lagi." };
+      case "twofaRecovery":
+        return { title: "Kode pemulihan baru", description: "Kode lama akan berhenti berlaku. Konfirmasi dengan password dan kode 2FA." };
+      case "twofaRecoveryDone":
+        return { title: "Simpan kode pemulihan baru", description: "Kode berikut hanya ditampilkan sekali." };
       case "audit":
         return { title: "Aktivitas keamanan", description: "Riwayat login, perubahan data, dan peristiwa keamanan terakhir." };
       case "reset":
@@ -630,6 +685,41 @@ export default function Home() {
             <button className="btn btn-danger" type="submit" disabled={busy}>{busy ? "Menonaktifkan…" : "Nonaktifkan 2FA"}</button>
           </div>
         </form>
+      );
+    }
+
+    if (dialog.kind === "twofaRecovery") {
+      return (
+        <form className="dialog-form" onSubmit={regenerateRecovery}>
+          <div className="reset-warning"><Icon name="alert" /><p>Kode pemulihan lama akan langsung tidak berlaku setelah ini.</p></div>
+          <label className="field">Password
+            <input name="password" type="password" autoComplete="current-password" required />
+          </label>
+          <label className="field">Kode 2FA atau kode pemulihan yang masih aktif
+            <input name="code" autoComplete="one-time-code" required />
+          </label>
+          <div className="dialog-actions">
+            <button className="btn btn-quiet" type="button" onClick={() => setDialog(null)} disabled={busy}>Batal</button>
+            <button className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Membuat…" : "Buat kode baru"}</button>
+          </div>
+        </form>
+      );
+    }
+
+    if (dialog.kind === "twofaRecoveryDone") {
+      return (
+        <div className="dialog-form">
+          <div className="reset-warning">
+            <Icon name="alert" />
+            <p>Salin dan simpan kode ini sekarang. Kode lama sudah tidak bisa dipakai.</p>
+          </div>
+          <div className="code-grid">
+            {newRecoveryCodes.map((code) => <code key={code}>{code}</code>)}
+          </div>
+          <div className="dialog-actions">
+            <button className="btn btn-primary wide" type="button" onClick={() => { setDialog(null); setNewRecoveryCodes([]); }}>Sudah disimpan</button>
+          </div>
+        </div>
       );
     }
 
@@ -1182,6 +1272,9 @@ export default function Home() {
                     {security?.twoFactorEnabled ? (
                       <>
                         <span className="tag">{security.recoveryCodesRemaining} kode pemulihan tersisa</span>
+                        <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "twofaRecovery" })}>
+                          Kode pemulihan baru
+                        </button>
                         <button className="btn btn-small" type="button" onClick={() => setDialog({ kind: "twofaDisable" })}>
                           Nonaktifkan 2FA
                         </button>

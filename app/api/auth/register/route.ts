@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { authSchema } from "@/lib/schemas";
+import { registrationSchema } from "@/lib/schemas";
 import { protectArcjet } from "@/lib/arcjet";
 import { hashToken, newToken } from "@/lib/tokens";
 import { sendMail, verificationEmail } from "@/lib/email";
@@ -14,9 +14,10 @@ import { isEmailAllowed } from "@/lib/allowlist";
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return forbidden();
 
-  const p = authSchema.safeParse(await req.json().catch(() => null));
-  if (!p.success || !p.data.name) {
-    return NextResponse.json({ error: "Nama, email, dan password (min. 8 karakter, maks. 72 byte) wajib diisi" }, { status: 400 });
+  const p = registrationSchema.safeParse(await req.json().catch(() => null));
+  if (!p.success) {
+    const first = p.error.issues[0]?.message ?? "Data tidak valid";
+    return NextResponse.json({ error: `Nama, email, dan password wajib diisi. ${first}` }, { status: 400 });
   }
 
   if (!isEmailAllowed(p.data.email)) {

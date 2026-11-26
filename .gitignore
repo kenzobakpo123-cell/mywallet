@@ -34,6 +34,7 @@ backups/
 *.db
 *.sqlite
 *.sql.gz
+*.enc
 
 # Test / coverage
 coverage/

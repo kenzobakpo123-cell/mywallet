@@ -14,6 +14,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:status": "prisma migrate status",
     "db:backup": "powershell -ExecutionPolicy Bypass -File scripts/backup-db.ps1",
+    "db:backup:secure": "node scripts/backup-encrypted.mjs",
     "db:push": "prisma db push"
   },
   "dependencies": {

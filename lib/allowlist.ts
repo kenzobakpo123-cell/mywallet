@@ -21,3 +21,18 @@ export function isEmailAllowed(input: string): boolean {
     entry.startsWith("@") ? email.endsWith(entry) : email === entry,
   );
 }
+
+/** Akun-akun yang tidak boleh masuk hanya dengan password. */
+export function requiresTwoFactor(input: string): boolean {
+  const email = normalize(input);
+  if (!email || !email.includes("@")) return false;
+
+  const raw = process.env.REQUIRE_2FA_EMAILS?.trim();
+  if (!raw) return false;
+
+  return raw
+    .split(",")
+    .map(normalize)
+    .filter(Boolean)
+    .some((entry) => (entry.startsWith("@") ? email.endsWith(entry) : email === entry));
+}

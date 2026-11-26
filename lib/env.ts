@@ -8,6 +8,8 @@ const schema = z.object({
   EMAIL_FROM: z.string().min(3),
   // Daftar email yang boleh mendaftar, dipisah koma. Boleh berupa @domain.com.
   ALLOWED_EMAILS: z.string().min(3, "ALLOWED_EMAILS wajib diisi"),
+  // Email yang wajib memakai 2FA. Daftar ini dipisah koma, sama seperti allowlist.
+  REQUIRE_2FA_EMAILS: z.string().min(3, "REQUIRE_2FA_EMAILS wajib diisi"),
   APP_URL: z
     .string()
     .url()

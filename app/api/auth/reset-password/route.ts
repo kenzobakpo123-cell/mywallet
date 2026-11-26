@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { passwordSchema } from "@/lib/schemas";
+import { strongPasswordSchema } from "@/lib/schemas";
 import { protectArcjet } from "@/lib/arcjet";
 import { hashToken } from "@/lib/tokens";
 import { audit } from "@/lib/audit";
-import { forbidden, isSameOrigin } from "@/lib/security";
+import { deviceLabel } from "@/lib/device";
+import { passwordChangedEmail, sendMail } from "@/lib/email";
+import { publicOrigin } from "@/lib/origin";
+import { clientIp, forbidden, isSameOrigin } from "@/lib/security";
 
-const schema = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/), password: passwordSchema });
+const schema = z.object({ token: z.string().regex(/^[a-f0-9]{64}$/), password: strongPasswordSchema });
 
 export async function POST(req: NextRequest) {
   if (!isSameOrigin(req)) return forbidden();
@@ -28,7 +31,7 @@ export async function POST(req: NextRequest) {
     passwordResetToken: hashToken(p.data.token),
     passwordResetExpires: { gt: new Date() },
   };
-  const user = await db.user.findFirst({ where, select: { id: true } });
+  const user = await db.user.findFirst({ where, select: { id: true, email: true } });
   if (!user) return NextResponse.json({ error: "Tautan reset tidak valid atau sudah kedaluwarsa" }, { status: 400 });
 
   // passwordHash diperbarui, token dihapus, dan sesi lama dicabut.
@@ -48,6 +51,13 @@ export async function POST(req: NextRequest) {
       data: { revokedAt: new Date() },
     });
     void audit({ action: "PASSWORD_RESET", userId: user.id, entity: "User", entityId: user.id, req });
+
+    const link = `${publicOrigin()}/#sessions`;
+    void sendMail({
+      to: user.email,
+      subject: "Password Finwise kamu diubah",
+      html: passwordChangedEmail(link, deviceLabel(req.headers.get("user-agent")), clientIp(req) ?? ""),
+    }).catch((error) => console.error("Gagal mengirim notifikasi perubahan password:", error));
   }
   return r.count
     ? NextResponse.json({ ok: true, message: "Password berhasil diubah. Silakan masuk." })

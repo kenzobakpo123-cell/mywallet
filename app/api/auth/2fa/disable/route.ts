@@ -6,7 +6,10 @@ import { protectArcjet } from "@/lib/arcjet";
 import { audit } from "@/lib/audit";
 import { clearAuthCookies } from "@/lib/cookies";
 import { db } from "@/lib/db";
-import { forbidden, isSameOrigin } from "@/lib/security";
+import { deviceLabel } from "@/lib/device";
+import { sendMail, twoFactorDisabledEmail } from "@/lib/email";
+import { publicOrigin } from "@/lib/origin";
+import { clientIp, forbidden, isSameOrigin } from "@/lib/security";
 import { consumeRecoveryCode } from "@/lib/two-factor-recovery";
 import { decryptTotpSecret, verifyTotp } from "@/lib/two-factor";
 
@@ -31,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   const user = await db.user.findUnique({
     where: { id: viewer.uid },
-    select: { passwordHash: true, twoFactorEnabled: true, twoFactorSecret: true },
+    select: { passwordHash: true, twoFactorEnabled: true, twoFactorSecret: true, email: true },
   });
   if (!user?.twoFactorEnabled || !user.twoFactorSecret) {
     return NextResponse.json({ error: "Autentikasi dua faktor belum aktif." }, { status: 400 });
@@ -64,6 +67,13 @@ export async function POST(req: NextRequest) {
     }),
   ]);
   void audit({ action: "TWO_FACTOR_DISABLED", userId: viewer.uid, entity: "User", entityId: viewer.uid, req });
+
+  const link = `${publicOrigin()}/#security`;
+  void sendMail({
+    to: user.email,
+    subject: "2FA Finwise dinonaktifkan",
+    html: twoFactorDisabledEmail(link, deviceLabel(req.headers.get("user-agent")), clientIp(req) ?? ""),
+  }).catch((error) => console.error("Gagal mengirim notifikasi 2FA dinonaktifkan:", error));
 
   const res = NextResponse.json({ ok: true, loggedOut: true });
   clearAuthCookies(res);
