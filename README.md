@@ -35,7 +35,7 @@
 ## Aplikasi PWA (iOS/Android)
 1. Buka `https://mywallet-virid-eight.vercel.app` di browser HP.
 2. Android (Chrome): menu `⋮` → **Install app** / **Add to Home screen**.
-3. iOS (Safari): tombol **Bagikan** → **Tambahkan ke Layar Utama**.
+3. iOS (Safari): tombol **Bagikan** (kotak dengan panah ke atas) → **Tambahkan ke Layar Utama**. Safari tidak menyediakan tombol unduh otomatis seperti Android; aplikasi akan menampilkan pengingat singkat untuk langkah ini.
 4. Ikon **Finwise** muncul di layar utama dan dibuka seperti aplikasi, tanpa Play Store/App Store.
 5. Service worker hanya menyimpan tampilan dan halaman cadangan offline. Data keuangan, cookie, dan token **tidak pernah** disimpan di cache service worker.
 6. Sanjungan pemasangan muncul otomatis di Android/Chrome bila memenuhi syarat. Di iOS, gunakan menu Bagikan seperti langkah 3.
