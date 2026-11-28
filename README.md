@@ -1,88 +1,166 @@
-# Keuangan Pribadi (Next.js + MySQL + React Native)
+# Finwise
 
-## Backend + web (folder ini)
-1. Nyalakan MySQL (XAMPP), buat database kosong bernama `keuangan`.
-2. `copy .env.example .env` lalu isi `DATABASE_URL`, `JWT_SECRET`, dan `ARCJET_KEY`.
-   - `JWT_SECRET` **wajib** string acak minimal 32 karakter. Buat dengan:
-     `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
-   - Gunakan user MySQL khusus (bukan `root`) dengan hak minimum.
-   - `ARCJET_KEY` didapat gratis di https://app.arcjet.com. Kalau dikosongkan, aplikasi masih jalan dengan rate limiter in-memory.
-   - `RESEND_API_KEY` + `EMAIL_FROM` dipakai untuk verifikasi email, reset password, dan notifikasi keamanan. Di development tanpa key, tautan dicetak di terminal instead of dikirim.
-   - `ALLOWED_EMAILS` berisi daftar email yang boleh mendaftar, dipisah koma (`@domain.com` juga boleh). Wajib di production; kosong hanya boleh di development.
-   - `REQUIRE_2FA_EMAILS` berisi akun yang **wajib** memasang 2FA sebelum bisa masuk, dengan format yang sama seperti `ALLOWED_EMAILS`.
-3. `npm install`
-4. `npm run db:migrate` (menerapkan file di `prisma/migrations`). Untuk lingkungan lokal saat mengubah skema, pakai `npm run db:migrate:dev`. Cek dengan `npm run db:status`.
-   - `npm run db:push` tetap ada sebagai jalan pintas, tapi **tidak disarankan lagi** untuk tim/produksi karena tidak menyimpan riwayat migrasi.
-5. `npm run dev` lalu buka http://localhost:3000, daftar dan masuk.
+**Catatan keuangan pribadi yang rapi, aman, dan bisa dipakai seperti aplikasi—tanpa perlu beli domain atau rilis ke toko aplikasi.**
 
-## Aplikasi HP (folder mobile)
-1. Di luar folder ini: `npx create-expo-app@latest keuangan-mobile --template blank-typescript`
-2. Ganti isi `App.tsx` dengan `mobile/App.tsx`.
-3. Pasang penyimpanan aman: `npx expo install expo-secure-store`
-4. Buat file `.env` di proyek Expo dan isi `EXPO_PUBLIC_API_URL=https://alamat-api-anda`. URL wajib HTTPS dengan sertifikat yang dipercaya perangkat.
-5. Untuk backend lokal, gunakan reverse proxy atau tunnel HTTPS yang tepercaya; jangan gunakan alamat HTTP atau IP laptop tanpa TLS. Aplikasi menolak URL non-HTTPS dan redirect.
-6. Jalankan `npx expo start`, lalu scan QR dengan Expo Go.
-7. Token akses **dan** refresh token disimpan melalui `expo-secure-store` dan otomatis dimuat saat aplikasi dibuka. Token akses diperbarui otomatis saat kedaluwarsa.
-8. Login mobile memakai `POST /api/auth/mobile-login` (mengembalikan token di body). Login web memakai `POST /api/auth/login` dan token hanya disimpan di cookie httpOnly.
-9. Transaksi bisa **ditambah, diubah, dan dihapus** langsung dari HP. Pilih jenis (masuk/keluar), kategori, catatan, tanggal, dan dompet. Navigasi bulan memakai tombol `‹` / `›`.
-10. Sinkron dua arah dengan web: data dimuat ulang otomatis saat aplikasi kembali ke foreground, bisa di-*pull to refresh*, dan setiap perubahan langsung menarik data terbaru. Web juga menarik perubahan HP lewat `BroadcastChannel` + refresh tiap 30 detik.
-11. Keluar dari aplikasi memanggil `POST /api/auth/logout` untuk mencabut sesi perangkat ini di server, bukan hanya menghapus token lokal.
-12. Menu **Lupa password?** dan **Kirim ulang verifikasi** juga tersedia di layar login HP.
-13. Aplikasi HP memuat profil dari server: mata uang, tanggal "hari ini", dan format angka mengikuti preferensi yang sama dengan web.
-14. Menu **Perangkat aktif** di HP menampilkan sesi dan menyediakan tombol cabut perangkat lain.
-15. Kalau 2FA aktif, layar login HP menanyakan kode authenticator atau kode pemulihan sebelum menyimpan token.
+[![Demo live](https://img.shields.io/badge/demo-online-0f766e?style=flat-square)](https://mywallet-virid-eight.vercel.app)
+[![CI](https://github.com/kenzobakpo123-cell/mywallet/actions/workflows/ci.yml/badge.svg)](https://github.com/kenzobakpo123-cell/mywallet/actions/workflows/ci.yml)
+[![Backup terenkripsi](https://github.com/kenzobakpo123-cell/mywallet/actions/workflows/backup.yml/badge.svg)](https://github.com/kenzobakpo123-cell/mywallet/actions/workflows/backup.yml)
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=nextdotjs&style=flat-square)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white&style=flat-square)
+![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma&style=flat-square)
+![Vitest](https://img.shields.io/badge/Vitest-96%20tests-6E9F18?logo=vitest&style=flat-square)
 
-## Aplikasi PWA (iOS/Android)
-1. Buka `https://mywallet-virid-eight.vercel.app` di browser HP.
-2. Android (Chrome): menu `⋮` → **Install app** / **Add to Home screen**.
-3. iOS (Safari): tombol **Bagikan** (kotak dengan panah ke atas) → **Tambahkan ke Layar Utama**. Safari tidak menyediakan tombol unduh otomatis seperti Android; aplikasi akan menampilkan pengingat singkat untuk langkah ini.
-4. Ikon **Finwise** muncul di layar utama dan dibuka seperti aplikasi, tanpa Play Store/App Store.
-5. Service worker hanya menyimpan tampilan dan halaman cadangan offline. Data keuangan, cookie, dan token **tidak pernah** disimpan di cache service worker.
-6. Sanjungan pemasangan muncul otomatis di Android/Chrome bila memenuhi syarat. Di iOS, gunakan menu Bagikan seperti langkah 3.
+**Demo:** https://mywallet-virid-eight.vercel.app · **Health check:** https://mywallet-virid-eight.vercel.app/api/health
 
-## Catatan
-- Tombol `CSV` dan `PDF` pada dashboard mengunduh **seluruh riwayat** transaksi. Filter tanggal/kategori/pencarian yang aktif ikut dipakai. Batas 20.000 baris per ekspor.
-- Riwayat web menampilkan 200 transaksi per halaman; tombol **Muat lebih banyak** mengambil halaman berikutnya dan filter tetap dipakai.
-- Dashboard sinkron antartab lewat `BroadcastChannel` dan refresh otomatis tiap 30 detik saat tab aktif.
-- Anggaran menampilkan penanda **Hampir habis** (≥80%) dan **Melewati batas** (≥100%).
-- Panel **Profil** (menu ⚙) mengubah nama, zona waktu, dan mata uang. Semua tampilan uang memakai mata uang pilihan; "hari ini" dan bulan default mengikuti zona waktu pengguna, bukan UTC server.
-- Tanggal transaksi disimpan sebagai kunci kalender `dateKey` (`YYYY-MM-DD`) sejak migrasi `20261120000100_profile_timezone`. Migrasi mengisi `dateKey` dari data lama, sehingga mengganti zona waktu **tidak menggeser** transaksi yang sudah tercatat.
-- "Saldo saat ini" = total saldo awal dompet + seluruh pemasukan − seluruh pengeluaran (tidak hanya bulan berjalan).
-- Setiap login membuat **sesi per perangkat**. Token akses berlaku 15 menit dan diperbarui otomatis lewat refresh token (30 hari) yang disimpan sebagai hash di tabel `Session`.
-- Menu **Perangkat** menampilkan perangkat aktif, IP, dan waktu terakhir dipakai. Kamu bisa mencabut satu perangkat atau semua perangkat lain. Login dari perangkat baru memicu notifikasi email.
-- **Keluar** hanya mencabut perangkat yang sedang dipakai. Reset password tetap mencabut semua sesi sekaligus.
-- Pendaftaran hanya untuk email yang tercantum di `ALLOWED_EMAILS`, dan wajib verifikasi email sebelum bisa masuk. Akun lama otomatis dianggap terverifikasi oleh migrasi `20261119000100_auth_email`.
-- Menu **Verifikasi dua faktor** mengaktifkan TOTP (Google Authenticator/1Password/Authy) dengan 8 kode pemulihan sekali pakai. Tombol **Kode pemulihan baru** membuat kode baru setelah konfirmasi password + kode 2FA. Kode TOTP dienkripsi AES-GCM, kode pemulihan disimpan sebagai hash SHA-256. Nonaktifkan 2FA mencabut semua sesi dan mengharuskan login ulang.
-- Email di `REQUIRE_2FA_EMAILS` tidak bisa masuk hanya dengan password: setelah password benar, pengguna langsung disuruh memasang authenticator, lalu session dibuat setelah 2FA aktif. Berlaku juga di aplikasi HP.
-- Pendaftaran dan reset password memakai password minimal 12 karakter, tidak boleh kata umum, angka saja, atau pengulangan berlebih. Login akun lama tetap menerima password minimal 8 karakter.
-- Percobaan login dengan password salah pada akun yang benar memicu email peringatan (maksimal satu per 15 menit). Setelah 3 kegagalan, semua sesi dan token akses dicabut otomatis dan email lockout dikirim. Pemakaian kode pemulihan, reset password, pembuatan ulang kode pemulihan, dan penonaktifan 2FA juga memicu notifikasi.
-- Menu **Lihat aktivitas** menampilkan audit log milik akun sendiri: login, perubahan profil/anggaran, 2FA, reset password, dan lockout.
-- Lupa password dan kirim ulang verifikasi tersedia di halaman masuk. Reset password juga menaikkan `tokenVersion`. Untuk akun yang memakai 2FA, tautan email saja tidak cukup: reset password wajib disertai kode authenticator atau kode pemulihan.
-- Rate limit, Shield/WAF, dan validasi email memakai **Arcjet** (`ARCJET_KEY`). Untuk endpoint kritis (login, verifikasi 2FA, permintaan reset, notifikasi login), pembatasan laju juga tersimpan di tabel `RateLimit` agar berbagi di semua instance serverless. Tanpa Arcjet, sistem tetap punya rate limiter in-memory untuk lokal.
-- MySQL bisa dijalankan via Docker: `docker compose up -d` (port `3307` agar tidak bentrok dengan XAMPP). `.env` lalu pakai `mysql://finwise:finwise-rahasia@localhost:3307/keuangan`.
-- Jangan commit file `.env` dengan secret asli. Rotasi `JWT_SECRET` jika pernah terekspos.
-- Dependabot memeriksa dependency npm dan GitHub Actions tiap minggu. Validasi produksi juga menolak konfigurasi jika `REQUIRE_2FA_EMAILS` berisi akun yang tidak tercantum di `ALLOWED_EMAILS`.
+> Demo memakai hostname gratis dari Vercel. Pendaftaran di production sengaja dibatasi oleh `ALLOWED_EMAILS`, jadi pengunjung umum tidak bisa membuat akun. Untuk mencoba alur lengkapnya, jalankan proyek secara lokal dengan email kamu sendiri—caranya ada di bawah.
 
-## Produksi
-1. `copy .env.production.example .env.production` lalu isi **semua** nilai. Validasi akan menolak startup kalau `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL`, `ALLOWED_EMAILS`, atau `REQUIRE_2FA_EMAILS` tidak valid.
-2. `docker compose -f docker-compose.prod.yml up -d --build` — menjalankan MySQL + aplikasi, dan migrasi dijalankan otomatis saat container app mulai.
-3. Health check: `GET /api/health` mengembalikan `200` kalau database terhubung.
-4. Backup: `npm run db:backup` (memakai `mysqldump` lokal, atau fallback ke container MySQL Docker). Untuk backup terenkripsi, siapkan `BACKUP_PASSPHRASE` (minimal 16 karakter) lalu jalankan `npm run db:backup:secure`. Hasil ada di folder `backups/` yang tidak ikut di-commit. GitHub Actions menjalankan backup terenkripsi tiap 01:00 WIB dan menyimpan artefak 90 hari; agar jalan, tambahkan GitHub Secrets `DATABASE_URL` dan `BACKUP_PASSPHRASE` di repository. Prosedur rotasi dan respons insiden ada di `docs/SECURITY-RUNBOOK.md`.
-5. CI GitHub Actions menjalankan `lint`, `test`, `migrate`, dan `build` pada setiap push/PR.
+---
 
-### Deploy ke Vercel + MySQL cloud
-1. Pakai MySQL cloud yang **mendukung foreign key** (mis. Aiven for MySQL atau Railway MySQL). PlanetScale bisa, tapi perlu mengubah schema ke `relationMode = "prisma"` dan menyesuaikan migrasi karena tidak mendukung FK.
-2. Import repo ke Vercel. `vercel.json` sudah mengatur build command menjadi `npm run build:vercel`, yaitu `prisma migrate deploy && next build`.
-3. Isi Environment Variables di Vercel: `DATABASE_URL`, `JWT_SECRET`, `ARCJET_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`, `APP_URL` (untuk produksi: `https://mywallet-virid-eight.vercel.app`), `ALLOWED_EMAILS`, dan `REQUIRE_2FA_EMAILS`.
-4. **Tanpa beli domain (cukup untuk mulai):** Vercel otomatis memberi `https://<nama-project>.vercel.app` — gratis, HTTPS, dan SSL otomatis. Pakai URL itu untuk web dan untuk `EXPO_PUBLIC_API_URL` di Expo. Tidak perlu mengubah DNS di IDwebhost.
-5. **Domain sendiri (opsional, berbayar):** di Vercel → **Settings → Domains → Add**, lalu di DNS registrar arahkan `A @` ke `76.76.21.21` dan `CNAME www` ke `cname.vercel-dns.com`.
-6. Resend: untuk mulai, pakai `EMAIL_FROM="Finwise <onboarding@resend.dev>"`. Domain `resend.dev` hanya bisa mengirim ke **email akun Resend kamu sendiri**. Agar bisa mengirim ke email orang lain, tambahkan domain di Resend → **Domains** dan pasang record SPF/DKIM/DMARC di DNS.
-7. Di Arcjet, buat site untuk hostname yang dipakai (boleh `*.vercel.app`) dan salin Site Key ke `ARCJET_KEY`.
-8. Di project Expo, isi `EXPO_PUBLIC_API_URL="https://<nama-project>.vercel.app"` bila belum punya domain sendiri.
-9. Cek `https://<nama-project>.vercel.app/api/health` sebelum dipakai HP.
+## Masalah yang ingin diselesaikan
 
-> Railway: `mysql.railway.internal` hanya bisa diakses dari dalam jaringan Railway. Untuk Vercel, buat **TCP proxy** pada service MySQL dan pakai endpoint publiknya di `DATABASE_URL`, misalnya `mysql://root:PASSWORD@hopper.proxy.rlwy.net:15197/railway`.
+Catatan keuangan sering kali berakhir di spreadsheet yang ribet dibuka dari HP, atau di aplikasi yang menyimpan data sensitif tanpa kontrol yang jelas. Finwise menyatukan semuanya dalam satu dashboard yang:
 
-Deploy saat ini: `https://mywallet-virid-eight.vercel.app`.
+- enak dipakai di desktop **dan** layar HP;
+- bisa dipasang ke layar utama lewat PWA (tidak perlu App Store/Play Store);
+- punya alur akun yang aman: verifikasi email, 2FA, sesi per perangkat, dan audit aktivitas;
+- tetap bisa di-deploy dengan biaya rendah memakai hostname gratis Vercel.
 
-Audit log tersimpan di tabel `AuditLog` (login, logout, register, verifikasi, reset password, sesi, 2FA, dan perubahan data) dan bisa dilihat dari menu **Pengaturan → Lihat aktivitas**. Audit memakai kunci klien; tabel `Session` menyimpan IP hanya untuk ditampilkan pengguna pada daftar perangkat. Refresh token dan kode pemulihan disimpan sebagai hash SHA-256; rahasia TOTP dienkripsi AES-GCM.
+Singkatnya: ini bukan sekadar CRUD transaksi. Fokusnya adalah **produk yang bisa dipakai sehari-hari + rekayasa keamanan dan operasional yang masuk akal untuk produksi**.
+
+---
+
+## Fitur utama
+
+| Area | Yang bisa dilakukan |
+| --- | --- |
+| **Ringkasan** | Lihat saldo saat ini, pemasukan/pengeluaran bulan berjalan, net flow, dan pengeluaran per kategori. |
+| **Transaksi** | Tambah, ubah, dan hapus pemasukan/pengeluaran. Filter berdasarkan rentang tanggal, kategori, dan kata kunci. |
+| **Dompet & kategori** | Kelola beberapa dompet dan kategori; saldo awal dompet ikut dihitung ke saldo keseluruhan. |
+| **Anggaran** | Pasang anggaran bulanan dengan penanda **Hampir habis** (≥80%) dan **Melewati batas** (≥100%). |
+| **Ekspor data** | Unduh seluruh riwayat ke **CSV** atau **PDF**. Filter aktif ikut dipakai; batas aman 20.000 baris per berkas. |
+| **Preferensi** | Atur nama, zona waktu, dan mata uang. Tanggal "hari ini" mengikuti zona waktu pengguna, bukan UTC server. |
+| **Sinkronisasi** | Perubahan antartab sinkron lewat `BroadcastChannel` + refresh otomatis tiap 30 detik saat tab aktif. |
+| **Klien HP** | Klien Expo contoh bisa menambah/ubah/hapus transaksi, pull-to-refresh, dan login memakai Bearer token. |
+| **Reset data** | Hapus seluruh data keuangan dan sesi dengan konfirmasi ketik `RESET`; akun, email, password, dan preferensi tetap tersimpan. |
+
+### PWA di iOS & Android
+
+Buka demo di HP, lalu:
+
+- **Android (Chrome):** menu `⋮` → **Install app** / **Add to Home screen**.
+- **iOS (Safari):** tombol **Bagikan** → **Tambahkan ke Layar Utama**.
+
+Safari tidak memicu prompt unduh otomatis, jadi aplikasi menampilkan pengingat ringkas khusus iOS. Ikon Finwise lalu muncul di layar utama dan dibuka seperti aplikasi biasa.
+
+> Service worker hanya menyimpan aset tampilan dan halaman cadangan offline. Data keuangan, cookie, dan token **tidak pernah** dimasukkan ke cache.
+
+---
+
+## Arsitektur
+
+```mermaid
+flowchart LR
+    U["Browser / PWA<br/>iOS & Android"] -->|"HTTPS · cookie httpOnly"| V["Vercel<br/>Next.js 16"]
+    M["Expo client<br/>Bearer token"] -->|"X-Finwise-Client: native"| V
+    V -->|Prisma| DB[("MySQL Railway")]
+    V --> E["Resend<br/>email transaksional"]
+    V --> A["Arcjet<br/>WAF & rate limit"]
+    G["GitHub Actions"] -->|"backup AES-256-GCM"| DB
+```
+
+Beberapa keputusan desain yang sengaja diambil:
+
+- **Vercel + Railway:** Vercel menjalankan Next.js dan migrasi otomatis saat build; MySQL Railway dipakai lewat TCP proxy publik. Host internal `mysql.railway.internal` tidak dipakai karena tidak bisa dijangkau dari serverless Vercel.
+- **Tanpa domain berbayar:** URL `*.vercel.app` sudah HTTPS dengan sertifikat otomatis. Domain sendiri opsional dan tidak diperlukan untuk mulai.
+- **Token terpisah per klien:** web hanya menyimpan token di cookie `httpOnly`; klien native memakai endpoint khusus dengan Bearer token di `expo-secure-store`.
+- **Tautan email deterministik:** `APP_URL` dibaca dari konfigurasi, bukan dari header `Host`/`Origin` request.
+- **Rate limit bersama:** endpoint kritis memakai tabel `RateLimit` di database agar pembatasan tetap konsisten di banyak instance serverless.
+
+---
+
+## Keamanan berlapis
+
+| Lapisan | Implementasi |
+| --- | --- |
+| **Pendaftaran** | Allowlist `ALLOWED_EMAILS` bersifat *fail-closed* di production + verifikasi email wajib. |
+| **Password** | Password baru minimal 12 karakter, ditolak bila terlalu umum/angka saja; hash memakai `bcryptjs`. |
+| **Sesi** | Token akses 15 menit, refresh token 30 hari disimpan sebagai hash SHA-256 dan diputar atomik; replay terdeteksi. |
+| **2FA** | TOTP SHA-1 6 digit/30 detik, rahasia dienkripsi AES-GCM, 8 kode pemulihan sekali pakai tersimpan sebagai hash. |
+| **2FA wajib** | `REQUIRE_2FA_EMAILS` memaksa authenticator dipasang sebelum sesi dibuat—termasuk saat reset password. |
+| **CSRF** | Mutation web menolak request tanpa `Origin` yang sah; klien native memakai header khusus + Bearer. |
+| **Respons insiden** | 3 password salah → sesi dicabut otomatis; notifikasi email untuk login gagal, lockout, dan perubahan 2FA. |
+| **WAF & limit** | Arcjet + rate limit berbasis database untuk login, 2FA, reset password, dan endpoint sensitif. |
+| **Audit** | Riwayat login, perubahan profil/anggaran, 2FA, reset, dan lockout bisa dilihat dari menu **Lihat aktivitas**. |
+| **Database** | User aplikasi dengan hak minimum; `root` hanya untuk administrasi/migrasi darurat. |
+| **Backup** | Backup terenkripsi AES-256-GCM tiap 01:00 WIB, artefak GitHub disimpan 90 hari. |
+
+Detail prosedur rotasi secret dan respons insiden ada di [`docs/SECURITY-RUNBOOK.md`](docs/SECURITY-RUNBOOK.md).
+
+---
+
+## Kualitas & pengujian
+
+- `npm run lint`, `tsc`, dan `next build` hijau.
+- **96 test** Vitest mencakup autentikasi, 2FA, CSRF, rate limit, ekspor CSV/PDF, tanggal & zona waktu, dan manifest PWA.
+- `npm audit` melaporkan **0 kerentanan**.
+- GitHub Actions menjalankan `lint → test → migrate → build` pada setiap push dan pull request.
+- Dependabot memperbarui dependency npm dan GitHub Actions tiap minggu.
+- Health check produksi: `GET /api/health`.
+
+---
+
+## Stack
+
+| Bagian | Teknologi |
+| --- | --- |
+| UI & server | Next.js 16 (App Router), React 19, TypeScript |
+| Database | MySQL, Prisma 6, migrasi versi |
+| Auth & kripto | `jose`, `bcryptjs`, TOTP, AES-GCM, SHA-256 |
+| Validasi | Zod 4 |
+| Email & proteksi | Resend, Arcjet |
+| Test | Vitest 5 |
+| Deploy | Vercel, Railway MySQL, GitHub Actions |
+| Mobile | Referensi klien Expo + `expo-secure-store` |
+
+---
+
+## Menjalankan secara lokal
+
+```powershell
+git clone https://github.com/kenzobakpo123-cell/mywallet.git
+cd mywallet
+npm install
+copy .env.example .env
+# Isi DATABASE_URL, JWT_SECRET, dan APP_URL=http://localhost:3000 di .env
+npm run db:migrate
+npm run dev
+```
+
+Buka http://localhost:3000 lalu daftar memakai email yang tercantum di `ALLOWED_EMAILS`.
+
+Tanpa `RESEND_API_KEY`, tautan verifikasi dan reset password dicetak di terminal, jadi alur tetap bisa dicoba. File `.env` sudah masuk `.gitignore` dan tidak pernah di-commit.
+
+Panduan lengkap—termasuk Docker, klien Expo, deploy Vercel, dan backup—ada di [`docs/SETUP.md`](docs/SETUP.md).
+
+---
+
+## Struktur singkat
+
+```text
+app/                 Halaman dashboard + route API
+components/          UI, auth screen, icon, PWA register
+lib/                 Auth, database, keamanan, ekspor, preferensi
+prisma/              Schema dan riwayat migrasi
+mobile/App.tsx       Contoh klien Expo (Bearer + secure store)
+tests/               Vitest
+.github/workflows/   CI dan backup terenkripsi
+docs/                Setup & security runbook
+```
+
+---
+
+## Dibangun oleh
+
+**[kenzobakpo123-cell](https://github.com/kenzobakpo123-cell)** — repo ini disusun sebagai portofolio: dari desain produk, implementasi backend/frontend, hardening keamanan, sampai operasional produksinya.
+
+Kalau kamu mau diskusi soal arsitektur, keamanan, atau pendekatan PWA-nya, silakan buka Issues di repository ini.
